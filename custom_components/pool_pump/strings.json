@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pool Pump einrichten",
+        "description": "Wähle die Shellys aus, über die deine Pumpe gesteuert wird.",
+        "data": {
+          "power_switch": "Strom-Schalter (Shelly 1 PM)",
+          "speed_number": "Drehzahl-Regler (Shelly Dimmer 0-10V)",
+          "start_switch": "Start-Signal (Shelly 1, potentialfreier Kontakt)",
+          "temp_sensors": "Temperatursensoren für Wintermodus (optional)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "menu_options": {
+          "programs": "Programme (Normal, Rückspülen, Nachspülen)",
+          "winter": "Wintermodus"
+        }
+      },
+      "programs": {
+        "title": "Programme konfigurieren",
+        "data": {
+          "normal_start": "Normalbetrieb Start",
+          "normal_end": "Normalbetrieb Ende",
+          "normal_speed": "Normalbetrieb Drehzahl (%)",
+          "backwash_duration": "Rückspülen Dauer (Minuten)",
+          "backwash_speed": "Rückspülen Drehzahl (%)",
+          "rinse_duration": "Nachspülen Dauer (Minuten)",
+          "rinse_speed": "Nachspülen Drehzahl (%)"
+        }
+      },
+      "winter": {
+        "title": "Wintermodus",
+        "data": {
+          "winter_enabled": "Wintermodus aktivieren"
+        }
+      }
+    }
+  }
+}
