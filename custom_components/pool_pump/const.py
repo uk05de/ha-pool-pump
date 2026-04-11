@@ -6,7 +6,13 @@ DOMAIN = "pool_pump"
 CONF_POWER_SWITCH = "power_switch"
 CONF_SPEED_NUMBER = "speed_number"
 CONF_START_SWITCH = "start_switch"
-CONF_TEMP_SENSORS = "temp_sensors"
+CONF_OUTSIDE_TEMPS = "outside_temps"
+CONF_WATER_TEMP = "water_temp"
+CONF_ROOM_TEMP = "room_temp"
+
+# Temperature plausibility filter
+TEMP_MIN_PLAUSIBLE = -30.0
+TEMP_MAX_PLAUSIBLE = 60.0
 
 # Timing (seconds)
 POWER_ON_DELAY = 5.0  # wait after mains power on before setting speed

@@ -11,7 +11,9 @@ from .const import (
     CONF_POWER_SWITCH,
     CONF_SPEED_NUMBER,
     CONF_START_SWITCH,
-    CONF_TEMP_SENSORS,
+    CONF_OUTSIDE_TEMPS,
+    CONF_WATER_TEMP,
+    CONF_ROOM_TEMP,
     CONF_TEST_MODE,
 )
 
@@ -42,11 +44,23 @@ class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_START_SWITCH): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="switch"),
             ),
-            vol.Optional(CONF_TEMP_SENSORS, default=[]): selector.EntitySelector(
+            vol.Optional(CONF_OUTSIDE_TEMPS, default=[]): selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain="sensor",
                     device_class="temperature",
                     multiple=True,
+                ),
+            ),
+            vol.Optional(CONF_WATER_TEMP): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                    device_class="temperature",
+                ),
+            ),
+            vol.Optional(CONF_ROOM_TEMP): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                    device_class="temperature",
                 ),
             ),
         })

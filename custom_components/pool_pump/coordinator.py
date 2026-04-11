@@ -12,12 +12,16 @@ from .const import (
     CONF_POWER_SWITCH,
     CONF_SPEED_NUMBER,
     CONF_START_SWITCH,
-    CONF_TEMP_SENSORS,
+    CONF_OUTSIDE_TEMPS,
+    CONF_WATER_TEMP,
+    CONF_ROOM_TEMP,
     CONF_TEST_MODE,
     POWER_ON_DELAY,
     STOP_DELAY,
     PROGRAM_OFF,
     PROGRAM_MANUAL,
+    TEMP_MIN_PLAUSIBLE,
+    TEMP_MAX_PLAUSIBLE,
 )
 
 log = logging.getLogger(__name__)
@@ -32,7 +36,9 @@ class PoolPumpCoordinator:
         self._power_switch = entry.data[CONF_POWER_SWITCH]
         self._speed_number = entry.data[CONF_SPEED_NUMBER]
         self._start_switch = entry.data[CONF_START_SWITCH]
-        self._temp_sensors = entry.data.get(CONF_TEMP_SENSORS, [])
+        self._outside_temps: list[str] = entry.data.get(CONF_OUTSIDE_TEMPS, [])
+        self._water_temp: str | None = entry.data.get(CONF_WATER_TEMP)
+        self._room_temp: str | None = entry.data.get(CONF_ROOM_TEMP)
 
         self._program = PROGRAM_OFF
         self._target_speed = 0
@@ -90,18 +96,35 @@ class PoolPumpCoordinator:
     def running(self) -> bool:
         return self._running
 
+    def _read_temp(self, entity_id: str | None) -> float | None:
+        """Read a temperature sensor with plausibility filter."""
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            value = float(state.state)
+        except ValueError:
+            return None
+        if value < TEMP_MIN_PLAUSIBLE or value > TEMP_MAX_PLAUSIBLE:
+            log.debug("Sensor %s reports implausible value %.1f, ignoring", entity_id, value)
+            return None
+        return value
+
     @property
-    def average_temperature(self) -> float | None:
-        """Average of all configured temperature sensors."""
-        values = []
-        for sensor_id in self._temp_sensors:
-            state = self.hass.states.get(sensor_id)
-            if state and state.state not in ("unknown", "unavailable"):
-                try:
-                    values.append(float(state.state))
-                except ValueError:
-                    pass
-        return sum(values) / len(values) if values else None
+    def outside_temperature(self) -> float | None:
+        """Minimum of all plausible outside sensors (safest for frost protection)."""
+        values = [v for e in self._outside_temps if (v := self._read_temp(e)) is not None]
+        return min(values) if values else None
+
+    @property
+    def water_temperature(self) -> float | None:
+        return self._read_temp(self._water_temp)
+
+    @property
+    def room_temperature(self) -> float | None:
+        return self._read_temp(self._room_temp)
 
     # --- Core operations ---
 

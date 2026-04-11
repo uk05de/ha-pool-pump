@@ -3,12 +3,14 @@
     "step": {
       "user": {
         "title": "Pool Pump einrichten",
-        "description": "Wähle die Shellys aus, über die deine Pumpe gesteuert wird.",
+        "description": "Wähle die Shellys und Sensoren aus, über die deine Pumpe gesteuert wird.",
         "data": {
           "power_switch": "Strom-Schalter (Shelly 1 PM)",
           "speed_number": "Drehzahl-Regler (Shelly Dimmer 0-10V)",
           "start_switch": "Start-Signal (Shelly 1, potentialfreier Kontakt)",
-          "temp_sensors": "Temperatursensoren für Wintermodus (optional)"
+          "outside_temps": "Außentemperatur-Sensoren (für Wintermodus, Minimum wird verwendet)",
+          "water_temp": "Wassertemperatur (optional, Safety-Check)",
+          "room_temp": "Technikhaus-Temperatur (optional, Info/Alarm)"
         }
       }
     }
