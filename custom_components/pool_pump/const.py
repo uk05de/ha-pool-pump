@@ -9,8 +9,8 @@ CONF_START_SWITCH = "start_switch"
 CONF_TEMP_SENSORS = "temp_sensors"
 
 # Timing (seconds)
-POWER_ON_DELAY = 3.0  # wait after mains power on before setting speed
-STOP_DELAY = 1.0      # wait after stop signal before cutting power
+POWER_ON_DELAY = 5.0  # wait after mains power on before setting speed
+STOP_DELAY = 1.0      # wait after stop signal before changing speed
 
 # Options keys — programs
 CONF_PROGRAMS = "programs"

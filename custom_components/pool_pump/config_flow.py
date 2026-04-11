@@ -36,7 +36,7 @@ class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 selector.EntitySelectorConfig(domain="switch"),
             ),
             vol.Required(CONF_SPEED_NUMBER): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="number"),
+                selector.EntitySelectorConfig(domain=["number", "light"]),
             ),
             vol.Required(CONF_START_SWITCH): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="switch"),
