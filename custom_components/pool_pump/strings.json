@@ -18,7 +18,8 @@
       "init": {
         "menu_options": {
           "programs": "Programme (Normal, Rückspülen, Nachspülen)",
-          "winter": "Wintermodus"
+          "winter": "Wintermodus",
+          "test": "Testmodus"
         }
       },
       "programs": {
@@ -37,6 +38,13 @@
         "title": "Wintermodus",
         "data": {
           "winter_enabled": "Wintermodus aktivieren"
+        }
+      },
+      "test": {
+        "title": "Testmodus",
+        "description": "Bei aktiviertem Testmodus werden keine Service-Calls an die Shellys gesendet. Alle Aktionen werden nur als WARNING in die Logs geschrieben.",
+        "data": {
+          "test_mode": "Testmodus aktivieren"
         }
       }
     }

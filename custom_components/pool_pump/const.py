@@ -25,6 +25,9 @@ CONF_RINSE_SPEED = "rinse_speed"
 # Options keys — winter mode
 CONF_WINTER_ENABLED = "winter_enabled"
 CONF_WINTER_THRESHOLDS = "winter_thresholds"
+
+# Options keys — test/debug
+CONF_TEST_MODE = "test_mode"
 # Each threshold: {temp_from, temp_to, interval_hours, duration_minutes, speed}
 
 # Programs

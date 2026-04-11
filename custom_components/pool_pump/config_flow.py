@@ -12,6 +12,7 @@ from .const import (
     CONF_SPEED_NUMBER,
     CONF_START_SWITCH,
     CONF_TEMP_SENSORS,
+    CONF_TEST_MODE,
 )
 
 
@@ -72,8 +73,24 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         """Options menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["programs", "winter"],
+            menu_options=["programs", "winter", "test"],
         )
+
+    async def async_step_test(self, user_input=None):
+        """Enable/disable test mode (no real service calls)."""
+        if user_input is not None:
+            options = dict(self._entry.options)
+            options[CONF_TEST_MODE] = user_input[CONF_TEST_MODE]
+            return self.async_create_entry(title="", data=options)
+
+        schema = vol.Schema({
+            vol.Required(
+                CONF_TEST_MODE,
+                default=self._entry.options.get(CONF_TEST_MODE, False),
+            ): bool,
+        })
+
+        return self.async_show_form(step_id="test", data_schema=schema)
 
     async def async_step_programs(self, user_input=None):
         """Configure normal/backwash/rinse schedules and speeds."""
