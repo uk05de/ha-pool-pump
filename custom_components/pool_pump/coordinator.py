@@ -17,6 +17,7 @@ from .const import (
     CONF_OUTSIDE_TEMPS,
     CONF_WATER_TEMP,
     CONF_ROOM_TEMP,
+    CONF_AUTOMATION_ENABLED,
     CONF_TEST_MODE,
     CONF_WINTER_OVERRIDE,
     CONF_WINTER_THRESHOLDS,
@@ -73,6 +74,8 @@ class PoolPumpCoordinator:
         self._running = False
         self._run_start_time: float | None = None  # monotonic
         self._last_frost_run_end: float | None = None  # monotonic
+        self._frost_cycle_start: float | None = None  # monotonic, when current frost cycle started
+        self._current_frost_threshold: dict | None = None  # active threshold during a frost cycle
         self._buffered_water_temp: float | None = None
 
         # Scheduler
@@ -85,6 +88,10 @@ class PoolPumpCoordinator:
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
 
     # --- Options accessors ---
+
+    @property
+    def automation_enabled(self) -> bool:
+        return self.entry.options.get(CONF_AUTOMATION_ENABLED, True)
 
     @property
     def test_mode(self) -> bool:
@@ -211,6 +218,15 @@ class PoolPumpCoordinator:
         if self._mode in (MODE_MANUAL, MODE_BACKWASH, MODE_RINSE):
             return
 
+        # Automation disabled — do nothing
+        if not self.automation_enabled:
+            if self._running and self._mode in (MODE_NORMAL, MODE_FROST):
+                log.info("Automation disabled, stopping pump")
+                await self.async_ensure_stopped()
+                self._mode = MODE_OFF
+                self._notify()
+            return
+
         outside = self.outside_temperature
         frost_needed = False
 
@@ -228,21 +244,22 @@ class PoolPumpCoordinator:
             await self._handle_normal_mode()
 
     def _find_threshold(self, temp: float) -> dict | None:
-        """Find the matching frost threshold for a given temperature."""
-        for t in self.thresholds:
-            if t["temp_from"] >= temp > t["temp_to"]:
-                return t
-            # Handle lowest threshold (temp_to might be -30)
-            if temp <= t["temp_to"] and t == self.thresholds[-1]:
-                return t
-        return None
+        """Find the most aggressive matching frost threshold.
+
+        Thresholds are sorted descending by below_temp. We walk through
+        and return the last one where temp < below_temp (= most aggressive).
+        """
+        match = None
+        for t in sorted(self.thresholds, key=lambda x: x["below_temp"], reverse=True):
+            if temp < t["below_temp"]:
+                match = t
+        return match
 
     # --- Frost protection ---
 
     async def _handle_frost_mode(self, outside: float | None) -> None:
-        """Run frost protection based on current outside temperature."""
+        """Run frost protection — reactive to threshold changes mid-run."""
         if outside is None:
-            # Override is on but no temp data — use most conservative threshold
             threshold = self.thresholds[-1] if self.thresholds else None
         else:
             threshold = self._find_threshold(outside)
@@ -251,47 +268,80 @@ class PoolPumpCoordinator:
             return
 
         is_continuous = threshold["interval_min"] == 0 and threshold["duration_min"] == 0
+        threshold_changed = (
+            self._current_frost_threshold is not None
+            and threshold["below_temp"] != self._current_frost_threshold["below_temp"]
+        )
+
+        # --- Already running a frost cycle ---
+        if self._running and self._mode == MODE_FROST:
+            if threshold_changed:
+                old = self._current_frost_threshold
+                self._current_frost_threshold = threshold
+                log.info("Frost threshold changed mid-run: below %d°C → below %d°C",
+                         old["below_temp"], threshold["below_temp"])
+
+                # Adjust speed immediately
+                if self._target_speed != threshold["speed"]:
+                    log.info("Adjusting speed: %d%% → %d%%", self._target_speed, threshold["speed"])
+                    await self.async_set_speed(threshold["speed"])
+
+                if is_continuous:
+                    # Cancel timed stop — switch to continuous
+                    if self._program_task and not self._program_task.done():
+                        self._program_task.cancel()
+                        self._program_task = None
+                    log.info("Switched to continuous frost protection at %d%%", threshold["speed"])
+                else:
+                    # Adjust remaining duration
+                    elapsed = time.monotonic() - self._frost_cycle_start if self._frost_cycle_start else 0
+                    new_duration_sec = threshold["duration_min"] * 60
+                    remaining = max(0, new_duration_sec - elapsed)
+
+                    if remaining > 0 and self._program_task and not self._program_task.done():
+                        # Cancel old timer, start new one with remaining time
+                        self._program_task.cancel()
+                        log.info("Adjusted frost cycle: %.0fs remaining at %d%%", remaining, threshold["speed"])
+                        self._program_task = self.entry.async_create_background_task(
+                            self.hass, self._frost_timed_stop(remaining), "pool_pump_frost_cycle"
+                        )
+            return
+
+        # --- Not running yet ---
+        self._current_frost_threshold = threshold
 
         if is_continuous:
-            # Continuous mode — just ensure running
-            if not self._running or self._mode != MODE_FROST:
-                log.info("Frost protection: continuous at %d%% (outside=%.1f°C)",
-                         threshold["speed"], outside or 0)
-                self._mode = MODE_FROST
-                self._notify()
-                await self.async_ensure_running(threshold["speed"])
-            elif self._target_speed != threshold["speed"]:
-                # Temperature changed bracket — adjust speed
-                await self.async_set_speed(threshold["speed"])
+            log.info("Frost protection: continuous at %d%% (outside=%.1f°C)",
+                     threshold["speed"], outside or 0)
+            self._mode = MODE_FROST
+            self._frost_cycle_start = time.monotonic()
+            self._notify()
+            await self.async_ensure_running(threshold["speed"])
         else:
-            # Interval mode — check if it's time to run
+            # Interval mode — check if it's time
             now = time.monotonic()
-
-            if self._running and self._mode == MODE_FROST:
-                # Currently running a frost cycle — let it finish (handled by _program_task)
-                return
-
             interval_sec = threshold["interval_min"] * 60
             if self._last_frost_run_end is None or (now - self._last_frost_run_end) >= interval_sec:
-                # Time for a frost run
                 duration_sec = threshold["duration_min"] * 60
                 log.info("Frost protection: %dmin at %d%% (outside=%.1f°C, interval=%dmin)",
                          threshold["duration_min"], threshold["speed"],
                          outside or 0, threshold["interval_min"])
                 self._mode = MODE_FROST
+                self._frost_cycle_start = time.monotonic()
                 self._notify()
                 await self.async_ensure_running(threshold["speed"])
-                # Schedule auto-stop
                 self._program_task = self.entry.async_create_background_task(
-                    self.hass, self._timed_stop(duration_sec), "pool_pump_frost_cycle"
+                    self.hass, self._frost_timed_stop(duration_sec), "pool_pump_frost_cycle"
                 )
 
-    async def _timed_stop(self, duration: float) -> None:
-        """Stop after duration seconds (for frost cycles, backwash, rinse)."""
+    async def _frost_timed_stop(self, duration: float) -> None:
+        """Stop frost cycle after duration seconds."""
         await asyncio.sleep(duration)
         await self._sample_water_temp_if_eligible()
         await self.async_ensure_stopped()
         self._last_frost_run_end = time.monotonic()
+        self._frost_cycle_start = None
+        self._current_frost_threshold = None
         self._mode = MODE_OFF
         self._notify()
 

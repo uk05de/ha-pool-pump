@@ -136,22 +136,24 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             return await self.async_step_init()
 
         thresholds = self._entry.options.get(CONF_WINTER_THRESHOLDS, DEFAULT_THRESHOLDS)
-        if not thresholds:
+        thresholds_sorted = sorted(thresholds, key=lambda t: t["below_temp"], reverse=True)
+
+        if not thresholds_sorted:
             desc = "Keine Schwellen konfiguriert."
         else:
-            lines = [f"**{len(thresholds)} Schwellen konfiguriert:**\n"]
-            for t in thresholds:
+            lines = []
+            for t in thresholds_sorted:
                 if t["interval_min"] == 0 and t["duration_min"] == 0:
                     lines.append(
-                        f"- {t['temp_from']}°C bis {t['temp_to']}°C → "
+                        f"Unter {t['below_temp']}°C → "
                         f"durchgängig bei {t['speed']}%"
                     )
                 else:
                     lines.append(
-                        f"- {t['temp_from']}°C bis {t['temp_to']}°C → "
+                        f"Unter {t['below_temp']}°C → "
                         f"alle {t['interval_min']}min für {t['duration_min']}min bei {t['speed']}%"
                     )
-            desc = "\n".join(lines)
+            desc = " | ".join(lines)
 
         return self.async_show_form(
             step_id="winter_thresholds",
@@ -164,23 +166,18 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             thresholds = list(self._entry.options.get(CONF_WINTER_THRESHOLDS, DEFAULT_THRESHOLDS))
             thresholds.append({
-                "temp_from": user_input["temp_from"],
-                "temp_to": user_input["temp_to"],
-                "interval_min": user_input["interval_min"],
-                "duration_min": user_input["duration_min"],
-                "speed": user_input["speed"],
+                "below_temp": int(user_input["below_temp"]),
+                "interval_min": int(user_input["interval_min"]),
+                "duration_min": int(user_input["duration_min"]),
+                "speed": int(user_input["speed"]),
             })
-            # Sort by temp_from descending
-            thresholds.sort(key=lambda t: t["temp_from"], reverse=True)
+            thresholds.sort(key=lambda t: t["below_temp"], reverse=True)
             options = dict(self._entry.options)
             options[CONF_WINTER_THRESHOLDS] = thresholds
             return self.async_create_entry(title="", data=options)
 
         schema = vol.Schema({
-            vol.Required("temp_from", default=0): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=-30, max=10, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required("temp_to", default=-5): selector.NumberSelector(
+            vol.Required("below_temp", default=0): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=-30, max=10, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required("interval_min", default=60): selector.NumberSelector(
@@ -203,13 +200,13 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             label = user_input["threshold"]
             thresholds = [t for t in thresholds
-                          if f"{t['temp_from']}°C → {t['temp_to']}°C" != label]
+                          if f"Unter {t['below_temp']}°C" != label]
             options = dict(self._entry.options)
             options[CONF_WINTER_THRESHOLDS] = thresholds
             return self.async_create_entry(title="", data=options)
 
         labels = {
-            f"{t['temp_from']}°C → {t['temp_to']}°C": f"{t['temp_from']}°C → {t['temp_to']}°C"
+            f"Unter {t['below_temp']}°C": f"Unter {t['below_temp']}°C"
             for t in thresholds
         }
 
