@@ -1,0 +1,75 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Pool Pump einrichten",
+        "description": "Wähle die Shellys und Sensoren aus.",
+        "data": {
+          "power_switch": "Strom-Schalter (Shelly 1 PM)",
+          "speed_number": "Drehzahl-Regler (Shelly Dimmer 0-10V)",
+          "start_switch": "Start-Signal (Shelly 1, potentialfreier Kontakt)",
+          "outside_temps": "Außentemperatur-Sensoren (Mittelwert, für Frostschutz)",
+          "water_temp": "Wassertemperatur Dosieranlage (optional)",
+          "room_temp": "Technikhaus-Temperatur (optional)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "menu_options": {
+          "programs": "Programme (Normal, Rückspülen, Nachspülen)",
+          "winter_thresholds": "Frostschutz-Schwellen anzeigen",
+          "add_threshold": "Frostschutz-Schwelle hinzufügen",
+          "remove_threshold": "Frostschutz-Schwelle entfernen",
+          "test": "Testmodus"
+        }
+      },
+      "programs": {
+        "title": "Programme konfigurieren",
+        "data": {
+          "normal_window_start": "Normalbetrieb Zeitfenster Start",
+          "normal_window_end": "Normalbetrieb Zeitfenster Ende",
+          "normal_speed": "Normalbetrieb Drehzahl (%)",
+          "backwash_duration": "Rückspülen Dauer (Minuten)",
+          "backwash_speed": "Rückspülen Drehzahl (%)",
+          "rinse_duration": "Nachspülen Dauer (Minuten)",
+          "rinse_speed": "Nachspülen Drehzahl (%)"
+        }
+      },
+      "winter_thresholds": {
+        "title": "Frostschutz-Schwellen ({count} konfiguriert)",
+        "description": "{thresholds}",
+        "menu_options": {
+          "add_threshold": "Schwelle hinzufügen",
+          "remove_threshold": "Schwelle entfernen"
+        }
+      },
+      "add_threshold": {
+        "title": "Frostschutz-Schwelle hinzufügen",
+        "description": "Intervall und Dauer auf 0 = durchgängiger Betrieb.",
+        "data": {
+          "temp_from": "Temperatur von (°C)",
+          "temp_to": "Temperatur bis (°C)",
+          "interval_min": "Intervall (Minuten, 0 = durchgängig)",
+          "duration_min": "Laufzeit (Minuten, 0 = durchgängig)",
+          "speed": "Drehzahl (%)"
+        }
+      },
+      "remove_threshold": {
+        "title": "Frostschutz-Schwelle entfernen",
+        "data": {
+          "threshold": "Schwelle"
+        }
+      },
+      "test": {
+        "title": "Testmodus",
+        "description": "Bei aktivem Testmodus werden keine Befehle an die Shellys gesendet. Alle Aktionen werden als WARNING geloggt.",
+        "data": {
+          "test_mode": "Testmodus aktivieren"
+        }
+      }
+    }
+  }
+}
