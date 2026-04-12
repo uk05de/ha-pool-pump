@@ -1,4 +1,4 @@
-"""Pool Pump sensors — status and temperature info."""
+"""Pool Pump sensors — temperatures and status."""
 
 import logging
 
@@ -19,28 +19,27 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: PoolPumpCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[SensorEntity] = [PoolPumpStatus(coordinator, entry)]
+    entities: list[SensorEntity] = [
+        PoolPumpStatus(coordinator, entry),
+        BufferedWaterTemp(coordinator, entry),
+    ]
 
     if coordinator._outside_temps:
         entities.append(OutsideTemperature(coordinator, entry))
-    if coordinator._water_temp:
-        entities.append(WaterTemperature(coordinator, entry))
-    if coordinator._room_temp:
+    if coordinator._water_temp_entity:
+        entities.append(LiveWaterTemperature(coordinator, entry))
+    if coordinator._room_temp_entity:
         entities.append(RoomTemperature(coordinator, entry))
 
     async_add_entities(entities)
 
 
 class _Base(SensorEntity):
-    """Common base for pool pump sensors."""
-
     _attr_has_entity_name = True
 
     def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
         self._coordinator = coordinator
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-        }
+        self._attr_device_info = {"identifiers": {(DOMAIN, entry.entry_id)}}
 
     async def async_added_to_hass(self) -> None:
         self._coordinator.add_listener(self.async_write_ha_state)
@@ -50,36 +49,31 @@ class _Base(SensorEntity):
 
 
 class PoolPumpStatus(_Base):
-    """Current pump status (text)."""
-
     _attr_name = "Status"
     _attr_icon = "mdi:information-outline"
 
-    def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
+    def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_status"
 
     @property
     def native_value(self) -> str:
-        if not self._coordinator.running:
+        c = self._coordinator
+        if not c.running:
             return "stopped"
-        return f"running ({self._coordinator.target_speed:.0f}%)"
+        return f"running ({c.target_speed:.0f}%)"
 
 
-class _TemperatureBase(_Base):
-    """Shared properties for temperature sensors."""
-
+class _TempBase(_Base):
     _attr_native_unit_of_measurement = "°C"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
 
 
-class OutsideTemperature(_TemperatureBase):
-    """Minimum plausible outside temperature across configured sensors."""
-
+class OutsideTemperature(_TempBase):
     _attr_name = "Outside temperature"
     _attr_icon = "mdi:thermometer-low"
 
-    def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
+    def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_outside_temp"
 
@@ -88,28 +82,37 @@ class OutsideTemperature(_TemperatureBase):
         return self._coordinator.outside_temperature
 
 
-class WaterTemperature(_TemperatureBase):
-    """Pool water temperature (for safety checks)."""
-
-    _attr_name = "Water temperature"
+class LiveWaterTemperature(_TempBase):
+    _attr_name = "Water temperature (live)"
     _attr_icon = "mdi:thermometer-water"
 
-    def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
+    def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_water_temp"
+        self._attr_unique_id = f"{entry.entry_id}_water_temp_live"
 
     @property
     def native_value(self) -> float | None:
         return self._coordinator.water_temperature
 
 
-class RoomTemperature(_TemperatureBase):
-    """Technical room temperature."""
+class BufferedWaterTemp(_TempBase):
+    _attr_name = "Water temperature (buffered)"
+    _attr_icon = "mdi:thermometer-check"
 
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_water_temp_buffered"
+
+    @property
+    def native_value(self) -> float | None:
+        return self._coordinator.buffered_water_temp
+
+
+class RoomTemperature(_TempBase):
     _attr_name = "Room temperature"
     _attr_icon = "mdi:home-thermometer"
 
-    def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
+    def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_room_temp"
 

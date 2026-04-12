@@ -1,13 +1,13 @@
-"""Pool Pump select — current program."""
+"""Pool Pump select — shows current operating mode (read-only info)."""
 
 import logging
 
-from homeassistant.components.select import SelectEntity
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, ALL_PROGRAMS
+from .const import DOMAIN
 from .coordinator import PoolPumpCoordinator
 
 log = logging.getLogger(__name__)
@@ -19,20 +19,19 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: PoolPumpCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([PoolPumpProgram(coordinator, entry)])
+    async_add_entities([PoolPumpMode(coordinator, entry)])
 
 
-class PoolPumpProgram(SelectEntity):
-    """Current program selector."""
+class PoolPumpMode(SensorEntity):
+    """Current operating mode (automatic, read-only)."""
 
     _attr_has_entity_name = True
-    _attr_name = "Program"
-    _attr_icon = "mdi:playlist-play"
-    _attr_options = ALL_PROGRAMS
+    _attr_name = "Mode"
+    _attr_icon = "mdi:auto-fix"
 
     def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
         self._coordinator = coordinator
-        self._attr_unique_id = f"{entry.entry_id}_program"
+        self._attr_unique_id = f"{entry.entry_id}_mode"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
         }
@@ -44,8 +43,5 @@ class PoolPumpProgram(SelectEntity):
         self._coordinator.remove_listener(self.async_write_ha_state)
 
     @property
-    def current_option(self) -> str:
-        return self._coordinator.program
-
-    async def async_select_option(self, option: str) -> None:
-        await self._coordinator.async_set_program(option)
+    def native_value(self) -> str:
+        return self._coordinator.mode
