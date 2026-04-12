@@ -239,8 +239,20 @@ class PoolPumpCoordinator:
                 frost_needed = True
 
         if frost_needed:
+            # If switching from normal to frost, stop normal operation first
+            if self._running and self._mode == MODE_NORMAL:
+                await self._sample_water_temp_if_eligible()
+                await self.async_ensure_stopped()
             await self._handle_frost_mode(outside)
         else:
+            # If switching from frost to normal, stop frost first
+            if self._running and self._mode == MODE_FROST:
+                await self.async_ensure_stopped()
+                self._frost_cycle_start = None
+                self._current_frost_threshold = None
+                if self._program_task and not self._program_task.done():
+                    self._program_task.cancel()
+                    self._program_task = None
             await self._handle_normal_mode()
 
     def _find_threshold(self, temp: float) -> dict | None:
@@ -335,14 +347,15 @@ class PoolPumpCoordinator:
                 )
 
     async def _frost_timed_stop(self, duration: float) -> None:
-        """Stop frost cycle after duration seconds."""
+        """Stop frost cycle after duration seconds. Mode stays on frost_protection."""
         await asyncio.sleep(duration)
         await self._sample_water_temp_if_eligible()
         await self.async_ensure_stopped()
         self._last_frost_run_end = time.monotonic()
         self._frost_cycle_start = None
         self._current_frost_threshold = None
-        self._mode = MODE_OFF
+        # Mode stays MODE_FROST — scheduler will re-evaluate and either
+        # keep frost mode (still cold) or switch to normal/off
         self._notify()
 
     # --- Normal operation ---
@@ -369,15 +382,21 @@ class PoolPumpCoordinator:
         # Check if pump should be running now
         should_run = in_window and self._should_run_now(now, window_start, window_end, run_hours)
 
-        if should_run and (not self._running or self._mode != MODE_NORMAL):
-            self._mode = MODE_NORMAL
-            self._notify()
+        # Set mode to normal while in the time window (even during pauses)
+        if in_window:
+            if self._mode != MODE_NORMAL:
+                self._mode = MODE_NORMAL
+                self._notify()
+        else:
+            if self._mode == MODE_NORMAL:
+                self._mode = MODE_OFF
+                self._notify()
+
+        if should_run and not self._running:
             await self.async_ensure_running(self.normal_speed)
         elif not should_run and self._running and self._mode == MODE_NORMAL:
             await self._sample_water_temp_if_eligible()
             await self.async_ensure_stopped()
-            self._mode = MODE_OFF
-            self._notify()
 
     def _should_run_now(self, now: datetime, window_start, window_end, run_hours: float) -> bool:
         """Determine if pump should run at this moment — distributes runtime across window."""
