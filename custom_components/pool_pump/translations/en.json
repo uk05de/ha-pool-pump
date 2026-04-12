@@ -70,6 +70,21 @@
           "speed": "Drehzahl"
         }
       },
+      "edit_threshold": {
+        "title": "Frostschutz-Schwelle bearbeiten",
+        "data": {
+          "threshold": "Schwelle"
+        }
+      },
+      "edit_threshold_values": {
+        "title": "Frostschutz-Schwelle bearbeiten",
+        "data": {
+          "below_temp": "Unter Temperatur",
+          "interval_min": "Intervall",
+          "duration_min": "Laufzeit",
+          "speed": "Drehzahl"
+        }
+      },
       "remove_threshold": {
         "title": "Frostschutz-Schwelle entfernen",
         "data": {

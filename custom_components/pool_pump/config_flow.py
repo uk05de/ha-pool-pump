@@ -89,6 +89,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 "remove_program": "Programm entfernen",
                 "winter_thresholds": "Frostschutz-Schwellen anzeigen",
                 "add_threshold": "Frostschutz-Schwelle hinzufügen",
+                "edit_threshold": "Frostschutz-Schwelle bearbeiten",
                 "remove_threshold": "Frostschutz-Schwelle entfernen",
                 "test": "Testmodus",
             },
@@ -281,6 +282,61 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         })
 
         return self.async_show_form(step_id="add_threshold", data_schema=schema)
+
+    async def async_step_edit_threshold(self, user_input=None):
+        """Step 1: select which threshold to edit."""
+        thresholds = list(self._entry.options.get(CONF_WINTER_THRESHOLDS, DEFAULT_THRESHOLDS))
+
+        if user_input is not None:
+            self._edit_threshold_temp = int(float(user_input["threshold"].split("°")[0].replace("Unter ", "")))
+            return await self.async_step_edit_threshold_values()
+
+        labels = {f"Unter {t['below_temp']}°C": f"Unter {t['below_temp']}°C" for t in thresholds}
+        if not labels:
+            return self.async_abort(reason="no_thresholds")
+
+        return self.async_show_form(
+            step_id="edit_threshold",
+            data_schema=vol.Schema({vol.Required("threshold"): vol.In(labels)}),
+        )
+
+    async def async_step_edit_threshold_values(self, user_input=None):
+        """Step 2: edit the selected threshold's values."""
+        thresholds = list(self._entry.options.get(CONF_WINTER_THRESHOLDS, DEFAULT_THRESHOLDS))
+        threshold = next((t for t in thresholds if t["below_temp"] == self._edit_threshold_temp), None)
+
+        if not threshold:
+            return self.async_abort(reason="threshold_not_found")
+
+        if user_input is not None:
+            for t in thresholds:
+                if t["below_temp"] == self._edit_threshold_temp:
+                    t["below_temp"] = int(user_input["below_temp"])
+                    t["interval_min"] = int(user_input["interval_min"])
+                    t["duration_min"] = int(user_input["duration_min"])
+                    t["speed"] = int(user_input["speed"])
+                    break
+            thresholds.sort(key=lambda t: t["below_temp"], reverse=True)
+            options = dict(self._entry.options)
+            options[CONF_WINTER_THRESHOLDS] = thresholds
+            return self.async_create_entry(title="", data=options)
+
+        schema = vol.Schema({
+            vol.Required("below_temp", default=threshold["below_temp"]): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=-30, max=10, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("interval_min", default=threshold["interval_min"]): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=480, step=5, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("duration_min", default=threshold["duration_min"]): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=120, step=5, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("speed", default=threshold["speed"]): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
+            ),
+        })
+
+        return self.async_show_form(step_id="edit_threshold_values", data_schema=schema)
 
     async def async_step_remove_threshold(self, user_input=None):
         thresholds = list(self._entry.options.get(CONF_WINTER_THRESHOLDS, DEFAULT_THRESHOLDS))
