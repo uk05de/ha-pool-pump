@@ -22,6 +22,7 @@ async def async_setup_entry(
     entities: list[SensorEntity] = [
         PoolPumpStatus(coordinator, entry),
         PoolPumpMode(coordinator, entry),
+        TestModeSensor(coordinator, entry),
         BufferedWaterTemp(coordinator, entry),
     ]
 
@@ -78,6 +79,25 @@ class PoolPumpMode(_Base):
     @property
     def native_value(self) -> str:
         return self._coordinator.mode
+
+
+class TestModeSensor(_Base):
+    """Shows whether test mode is active (read-only, configured via options)."""
+
+    _attr_name = "Test mode"
+    _attr_icon = "mdi:test-tube"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_test_mode"
+
+    @property
+    def native_value(self) -> str:
+        return "active" if self._coordinator.test_mode else "inactive"
+
+    @property
+    def icon(self) -> str:
+        return "mdi:test-tube-off" if not self._coordinator.test_mode else "mdi:test-tube"
 
 
 class _TempBase(_Base):
