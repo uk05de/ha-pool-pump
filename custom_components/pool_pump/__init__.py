@@ -10,7 +10,7 @@ from .coordinator import PoolPumpCoordinator
 
 log = logging.getLogger(__name__)
 
-PLATFORMS = ["switch", "number", "select", "sensor"]
+PLATFORMS = ["switch", "number", "sensor"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

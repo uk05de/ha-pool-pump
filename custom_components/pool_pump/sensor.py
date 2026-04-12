@@ -21,6 +21,7 @@ async def async_setup_entry(
     coordinator: PoolPumpCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [
         PoolPumpStatus(coordinator, entry),
+        PoolPumpMode(coordinator, entry),
         BufferedWaterTemp(coordinator, entry),
     ]
 
@@ -62,6 +63,21 @@ class PoolPumpStatus(_Base):
         if not c.running:
             return "stopped"
         return f"running ({c.target_speed:.0f}%)"
+
+
+class PoolPumpMode(_Base):
+    """Current operating mode (automatic, read-only)."""
+
+    _attr_name = "Mode"
+    _attr_icon = "mdi:auto-fix"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_mode"
+
+    @property
+    def native_value(self) -> str:
+        return self._coordinator.mode
 
 
 class _TempBase(_Base):
