@@ -30,7 +30,7 @@
         }
       },
       "winter_thresholds": {
-        "title": "Frostschutz-Schwellen ({count})",
+        "title": "Frostschutz-Schwellen",
         "description": "{thresholds}"
       },
       "add_threshold": {

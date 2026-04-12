@@ -156,7 +156,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="winter_thresholds",
             data_schema=vol.Schema({}),
-            description=desc,
+            description_placeholders={"thresholds": desc},
         )
 
     async def async_step_add_threshold(self, user_input=None):
