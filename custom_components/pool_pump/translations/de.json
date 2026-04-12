@@ -10,7 +10,8 @@
           "start_switch": "Start-Signal (Shelly 1)",
           "outside_temps": "Außentemperatur-Sensoren",
           "water_temp": "Wassertemperatur (Dosieranlage)",
-          "room_temp": "Technikhaus-Temperatur"
+          "room_temp": "Technikhaus-Temperatur",
+          "freshwater_switch": "Frischwasser-Ventil (optional)"
         }
       }
     }
@@ -24,7 +25,8 @@
           "normal_window_end": "Filterbetrieb Ende",
           "normal_speed": "Filterbetrieb Drehzahl",
           "backwash_interval_days": "Rückspül-Intervall",
-          "backwash_program_name": "Name des Rückspül-Programms"
+          "backwash_program_name": "Name des Rückspül-Programms",
+          "freshwater_duration": "Frischwasser Laufzeit"
         }
       },
       "show_programs": {

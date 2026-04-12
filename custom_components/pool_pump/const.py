@@ -36,6 +36,11 @@ CONF_BACKWASH_INTERVAL_DAYS = "backwash_interval_days"
 CONF_BACKWASH_PROGRAM_NAME = "backwash_program_name"
 DEFAULT_BACKWASH_INTERVAL = 14
 
+# Config entry keys — fresh water
+CONF_FRESHWATER_SWITCH = "freshwater_switch"
+CONF_FRESHWATER_DURATION = "freshwater_duration"
+DEFAULT_FRESHWATER_DURATION = 30  # minutes
+
 # Options keys — frost protection
 CONF_WINTER_OVERRIDE = "winter_override"
 CONF_WINTER_THRESHOLDS = "winter_thresholds"

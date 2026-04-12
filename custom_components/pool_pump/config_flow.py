@@ -23,6 +23,9 @@ from .const import (
     CONF_BACKWASH_INTERVAL_DAYS,
     CONF_BACKWASH_PROGRAM_NAME,
     DEFAULT_BACKWASH_INTERVAL,
+    CONF_FRESHWATER_SWITCH,
+    CONF_FRESHWATER_DURATION,
+    DEFAULT_FRESHWATER_DURATION,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
 )
@@ -64,6 +67,9 @@ class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             vol.Optional(CONF_ROOM_TEMP): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
+            ),
+            vol.Optional(CONF_FRESHWATER_SWITCH): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="switch"),
             ),
         })
 
@@ -117,6 +123,9 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 selector.NumberSelectorConfig(min=1, max=60, step=1, unit_of_measurement="Tage", mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(CONF_BACKWASH_PROGRAM_NAME, default=opts.get(CONF_BACKWASH_PROGRAM_NAME, "Backwash")): str,
+            vol.Required(CONF_FRESHWATER_DURATION, default=opts.get(CONF_FRESHWATER_DURATION, DEFAULT_FRESHWATER_DURATION)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=240, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+            ),
         })
 
         return self.async_show_form(step_id="automatik_settings", data_schema=schema)

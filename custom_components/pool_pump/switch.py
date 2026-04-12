@@ -26,6 +26,9 @@ async def async_setup_entry(
         WinterOverrideSwitch(coordinator, entry),
     ]
 
+    if coordinator.freshwater_available:
+        entities.append(FreshwaterSwitch(coordinator, entry))
+
     # Create a switch for each user-defined program
     for prog in coordinator.programs:
         entities.append(TimedProgramSwitch(coordinator, entry, prog))
@@ -118,6 +121,27 @@ class TimedProgramSwitch(_BaseSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._coordinator.async_deactivate_program(self._program_name)
+
+
+class FreshwaterSwitch(_BaseSwitch):
+    """Open/close freshwater valve with auto-timer."""
+
+    _attr_name = "Frischwasser"
+    _attr_icon = "mdi:water-plus"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_freshwater"
+
+    @property
+    def is_on(self) -> bool:
+        return self._coordinator.freshwater_running
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._coordinator.async_start_freshwater()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._coordinator.async_stop_freshwater()
 
 
 class WinterOverrideSwitch(_BaseSwitch):

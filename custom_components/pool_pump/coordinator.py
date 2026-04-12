@@ -28,6 +28,9 @@ from .const import (
     CONF_BACKWASH_INTERVAL_DAYS,
     CONF_BACKWASH_PROGRAM_NAME,
     DEFAULT_BACKWASH_INTERVAL,
+    CONF_FRESHWATER_SWITCH,
+    CONF_FRESHWATER_DURATION,
+    DEFAULT_FRESHWATER_DURATION,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
     POWER_ON_DELAY,
@@ -79,9 +82,14 @@ class PoolPumpCoordinator:
         # Automatik sub-mode (normal vs frost — only relevant when automatik is active)
         self._auto_sub_mode: str | None = None  # "normal" or "frost_protection"
 
+        # Freshwater
+        self._freshwater_switch: str | None = entry.data.get(CONF_FRESHWATER_SWITCH)
+        self._freshwater_running = False
+        self._freshwater_task: asyncio.Task | None = None
+
         # Backwash reminder
-        self._last_backwash_date: str | None = None  # ISO date string
-        self._last_notification_date: str | None = None  # prevent daily spam
+        self._last_backwash_date: str | None = None
+        self._last_notification_date: str | None = None
 
         # Tasks
         self._scheduler_task: asyncio.Task | None = None
@@ -223,6 +231,8 @@ class PoolPumpCoordinator:
             self._scheduler_task.cancel()
         if self._program_task and not self._program_task.done():
             self._program_task.cancel()
+        if self._freshwater_task and not self._freshwater_task.done():
+            self._freshwater_task.cancel()
         await self._persist_state()
         log.info("Pool Pump coordinator stopped")
 
@@ -587,6 +597,57 @@ class PoolPumpCoordinator:
             await self._set_speed_entity(speed)
             self._target_speed = speed
             self._notify()
+
+    # --- Freshwater control ---
+
+    @property
+    def freshwater_available(self) -> bool:
+        return self._freshwater_switch is not None
+
+    @property
+    def freshwater_running(self) -> bool:
+        return self._freshwater_running
+
+    @property
+    def freshwater_duration(self) -> int:
+        return self.entry.options.get(CONF_FRESHWATER_DURATION, DEFAULT_FRESHWATER_DURATION)
+
+    async def async_start_freshwater(self) -> None:
+        """Open freshwater valve for configured duration."""
+        if not self._freshwater_switch:
+            log.warning("No freshwater switch configured")
+            return
+        duration = self.freshwater_duration * 60
+        log.info("Freshwater: opening valve for %dmin", self.freshwater_duration)
+        await self._call("switch", "turn_on", {"entity_id": self._freshwater_switch})
+        self._freshwater_running = True
+        self._notify()
+        if self._freshwater_task and not self._freshwater_task.done():
+            self._freshwater_task.cancel()
+        self._freshwater_task = self.entry.async_create_background_task(
+            self.hass, self._freshwater_timed_stop(duration), "pool_pump_freshwater"
+        )
+
+    async def async_stop_freshwater(self) -> None:
+        """Close freshwater valve."""
+        if not self._freshwater_switch:
+            return
+        if self._freshwater_task and not self._freshwater_task.done():
+            self._freshwater_task.cancel()
+            self._freshwater_task = None
+        log.info("Freshwater: closing valve")
+        await self._call("switch", "turn_off", {"entity_id": self._freshwater_switch})
+        self._freshwater_running = False
+        self._notify()
+
+    async def _freshwater_timed_stop(self, duration: float) -> None:
+        """Auto-close valve after duration."""
+        await asyncio.sleep(duration)
+        log.info("Freshwater: timer expired, closing valve")
+        await self._call("switch", "turn_off", {"entity_id": self._freshwater_switch})
+        self._freshwater_running = False
+        self._freshwater_task = None
+        self._notify()
 
     # --- Backwash counter ---
 
