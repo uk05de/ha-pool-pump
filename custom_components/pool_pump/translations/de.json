@@ -25,10 +25,27 @@
           "normal_speed": "Filterbetrieb Drehzahl"
         }
       },
+      "show_programs": {
+        "title": "Programme",
+        "description": "{programs}"
+      },
       "add_program": {
         "title": "Programm hinzufügen",
         "data": {
           "name": "Programmname",
+          "speed": "Drehzahl",
+          "duration_min": "Dauer (0 = manuell stoppen)"
+        }
+      },
+      "edit_program": {
+        "title": "Programm bearbeiten",
+        "data": {
+          "program": "Programm"
+        }
+      },
+      "edit_program_values": {
+        "title": "Programm bearbeiten",
+        "data": {
           "speed": "Drehzahl",
           "duration_min": "Dauer (0 = manuell stoppen)"
         }

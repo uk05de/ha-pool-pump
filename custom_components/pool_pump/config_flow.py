@@ -83,7 +83,9 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             menu_options={
                 "automatik_settings": "Automatik-Einstellungen",
+                "show_programs": "Programme anzeigen",
                 "add_program": "Programm hinzufügen",
+                "edit_program": "Programm bearbeiten",
                 "remove_program": "Programm entfernen",
                 "winter_thresholds": "Frostschutz-Schwellen anzeigen",
                 "add_threshold": "Frostschutz-Schwelle hinzufügen",
@@ -113,6 +115,27 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
 
     # --- User-defined programs ---
 
+    async def async_step_show_programs(self, user_input=None):
+        """Show all configured programs — OK to go back."""
+        if user_input is not None:
+            return await self.async_step_init()
+
+        programs = self._entry.options.get(CONF_PROGRAMS, DEFAULT_PROGRAMS)
+        if not programs:
+            desc = "Keine Programme konfiguriert."
+        else:
+            lines = ["Programm | Drehzahl | Dauer", "--- | --- | ---"]
+            for p in programs:
+                dur = f"{p['duration_min']} min" if p["duration_min"] > 0 else "manuell"
+                lines.append(f"{p['name']} | {p['speed']}% | {dur}")
+            desc = "\n".join(lines)
+
+        return self.async_show_form(
+            step_id="show_programs",
+            data_schema=vol.Schema({}),
+            description_placeholders={"programs": desc},
+        )
+
     async def async_step_add_program(self, user_input=None):
         if user_input is not None:
             programs = list(self._entry.options.get(CONF_PROGRAMS, DEFAULT_PROGRAMS))
@@ -136,6 +159,52 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         })
 
         return self.async_show_form(step_id="add_program", data_schema=schema)
+
+    async def async_step_edit_program(self, user_input=None):
+        """Step 1: select which program to edit."""
+        programs = list(self._entry.options.get(CONF_PROGRAMS, DEFAULT_PROGRAMS))
+
+        if user_input is not None:
+            self._edit_program_name = user_input["program"]
+            return await self.async_step_edit_program_values()
+
+        labels = {p["name"]: p["name"] for p in programs}
+        if not labels:
+            return self.async_abort(reason="no_programs")
+
+        return self.async_show_form(
+            step_id="edit_program",
+            data_schema=vol.Schema({vol.Required("program"): vol.In(labels)}),
+        )
+
+    async def async_step_edit_program_values(self, user_input=None):
+        """Step 2: edit the selected program's values."""
+        programs = list(self._entry.options.get(CONF_PROGRAMS, DEFAULT_PROGRAMS))
+        prog = next((p for p in programs if p["name"] == self._edit_program_name), None)
+
+        if not prog:
+            return self.async_abort(reason="program_not_found")
+
+        if user_input is not None:
+            for p in programs:
+                if p["name"] == self._edit_program_name:
+                    p["speed"] = int(user_input["speed"])
+                    p["duration_min"] = int(user_input["duration_min"])
+                    break
+            options = dict(self._entry.options)
+            options[CONF_PROGRAMS] = programs
+            return self.async_create_entry(title="", data=options)
+
+        schema = vol.Schema({
+            vol.Required("speed", default=prog["speed"]): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("duration_min", default=prog["duration_min"]): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=120, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+            ),
+        })
+
+        return self.async_show_form(step_id="edit_program_values", data_schema=schema)
 
     async def async_step_remove_program(self, user_input=None):
         programs = list(self._entry.options.get(CONF_PROGRAMS, DEFAULT_PROGRAMS))
@@ -168,13 +237,13 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         if not thresholds_sorted:
             desc = "Keine Schwellen konfiguriert."
         else:
-            lines = []
+            lines = ["Temperatur | Intervall | Dauer | Drehzahl", "--- | --- | --- | ---"]
             for t in thresholds_sorted:
                 if t["interval_min"] == 0 and t["duration_min"] == 0:
-                    lines.append(f"Unter {t['below_temp']}°C → durchgängig bei {t['speed']}%")
+                    lines.append(f"Unter {t['below_temp']}°C | durchgängig | durchgängig | {t['speed']}%")
                 else:
-                    lines.append(f"Unter {t['below_temp']}°C → alle {t['interval_min']}min für {t['duration_min']}min bei {t['speed']}%")
-            desc = " | ".join(lines)
+                    lines.append(f"Unter {t['below_temp']}°C | {t['interval_min']} min | {t['duration_min']} min | {t['speed']}%")
+            desc = "\n".join(lines)
 
         return self.async_show_form(
             step_id="winter_thresholds",
