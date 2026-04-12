@@ -131,21 +131,31 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
     # --- Winter Thresholds ---
 
     async def async_step_winter_thresholds(self, user_input=None):
-        """Show current thresholds as info, allow add/remove from menu."""
+        """Show current thresholds — click OK to go back."""
+        if user_input is not None:
+            return await self.async_step_init()
+
         thresholds = self._entry.options.get(CONF_WINTER_THRESHOLDS, DEFAULT_THRESHOLDS)
-        desc = "\n".join(
-            f"• {t['temp_from']}°C bis {t['temp_to']}°C: "
-            + (f"alle {t['interval_min']}min für {t['duration_min']}min bei {t['speed']}%"
-               if t['interval_min'] > 0
-               else f"durchgängig bei {t['speed']}%")
-            for t in thresholds
-        )
-        return self.async_show_menu(
+        if not thresholds:
+            desc = "Keine Schwellen konfiguriert."
+        else:
+            lines = []
+            for t in thresholds:
+                if t["interval_min"] == 0 and t["duration_min"] == 0:
+                    lines.append(
+                        f"{t['temp_from']}°C bis {t['temp_to']}°C → "
+                        f"durchgängig bei {t['speed']}%"
+                    )
+                else:
+                    lines.append(
+                        f"{t['temp_from']}°C bis {t['temp_to']}°C → "
+                        f"alle {t['interval_min']}min für {t['duration_min']}min bei {t['speed']}%"
+                    )
+            desc = "\n".join(lines)
+
+        return self.async_show_form(
             step_id="winter_thresholds",
-            menu_options={
-                "add_threshold": "Schwelle hinzufügen",
-                "remove_threshold": "Schwelle entfernen",
-            },
+            data_schema=vol.Schema({}),
             description_placeholders={"thresholds": desc, "count": str(len(thresholds))},
         )
 

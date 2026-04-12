@@ -29,6 +29,10 @@
           "rinse_speed": "Nachspülen Drehzahl"
         }
       },
+      "winter_thresholds": {
+        "title": "Frostschutz-Schwellen ({count})",
+        "description": "{thresholds}"
+      },
       "add_threshold": {
         "title": "Frostschutz-Schwelle hinzufügen",
         "description": "Intervall und Dauer auf 0 setzen für durchgängigen Betrieb.",
