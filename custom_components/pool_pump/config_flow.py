@@ -126,19 +126,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             vol.Required(CONF_RINSE_SPEED, default=opts.get(CONF_RINSE_SPEED, 50)): speed_selector(50),
         })
 
-        return self.async_show_form(
-            step_id="programs",
-            data_schema=schema,
-            data_description={
-                CONF_NORMAL_WINDOW_START: "Startzeit des täglichen Filterbetriebs",
-                CONF_NORMAL_WINDOW_END: "Endzeit des täglichen Filterbetriebs",
-                CONF_NORMAL_SPEED: "Pumpengeschwindigkeit im Normalbetrieb",
-                CONF_BACKWASH_DURATION: "Dauer der Rückspülung",
-                CONF_BACKWASH_SPEED: "Pumpengeschwindigkeit bei Rückspülung",
-                CONF_RINSE_DURATION: "Dauer des Nachspülens",
-                CONF_RINSE_SPEED: "Pumpengeschwindigkeit beim Nachspülen",
-            },
-        )
+        return self.async_show_form(step_id="programs", data_schema=schema)
 
     # --- Winter Thresholds ---
 
@@ -196,17 +184,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             ),
         })
 
-        return self.async_show_form(
-            step_id="add_threshold",
-            data_schema=schema,
-            data_description={
-                "temp_from": "Obere Temperaturgrenze der Schwelle",
-                "temp_to": "Untere Temperaturgrenze der Schwelle",
-                "interval_min": "Alle X Minuten laufen lassen (0 = durchgängig)",
-                "duration_min": "Laufzeit pro Intervall (0 = durchgängig)",
-                "speed": "Pumpengeschwindigkeit in dieser Schwelle",
-            },
-        )
+        return self.async_show_form(step_id="add_threshold", data_schema=schema)
 
     async def async_step_remove_threshold(self, user_input=None):
         """Remove a frost threshold."""

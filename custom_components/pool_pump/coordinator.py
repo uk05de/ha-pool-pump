@@ -173,8 +173,10 @@ class PoolPumpCoordinator:
             self._buffered_water_temp = stored.get("buffered_water_temp")
             log.info("Restored buffered water temp: %s°C", self._buffered_water_temp)
 
-        # Start scheduler
-        self._scheduler_task = self.hass.async_create_task(self._scheduler_loop())
+        # Start scheduler as background task (must not block setup)
+        self._scheduler_task = self.entry.async_create_background_task(
+            self.hass, self._scheduler_loop(), "pool_pump_scheduler"
+        )
         log.info("Pool Pump coordinator started (test_mode=%s)", self.test_mode)
 
     async def async_shutdown(self) -> None:
@@ -280,8 +282,8 @@ class PoolPumpCoordinator:
                 self._notify()
                 await self.async_ensure_running(threshold["speed"])
                 # Schedule auto-stop
-                self._program_task = self.hass.async_create_task(
-                    self._timed_stop(duration_sec)
+                self._program_task = self.entry.async_create_background_task(
+                    self.hass, self._timed_stop(duration_sec), "pool_pump_frost_cycle"
                 )
 
     async def _timed_stop(self, duration: float) -> None:
@@ -470,7 +472,9 @@ class PoolPumpCoordinator:
         self._mode = MODE_BACKWASH
         self._notify()
         await self.async_ensure_running(speed)
-        self._program_task = self.hass.async_create_task(self._timed_stop(duration))
+        self._program_task = self.entry.async_create_background_task(
+            self.hass, self._timed_stop(duration), "pool_pump_backwash"
+        )
 
     async def async_start_rinse(self) -> None:
         """Run rinse for configured duration."""
@@ -482,7 +486,9 @@ class PoolPumpCoordinator:
         self._mode = MODE_RINSE
         self._notify()
         await self.async_ensure_running(speed)
-        self._program_task = self.hass.async_create_task(self._timed_stop(duration))
+        self._program_task = self.entry.async_create_background_task(
+            self.hass, self._timed_stop(duration), "pool_pump_rinse"
+        )
 
     async def async_set_mode(self, mode: str) -> None:
         """Manually set the operating mode."""
