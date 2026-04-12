@@ -11,6 +11,7 @@ from .coordinator import PoolPumpCoordinator
 log = logging.getLogger(__name__)
 
 PLATFORMS = ["switch", "number", "sensor"]
+# select platform removed — mode is now a read-only sensor
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

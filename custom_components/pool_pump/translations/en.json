@@ -17,16 +17,26 @@
   },
   "options": {
     "step": {
-      "programs": {
-        "title": "Programme konfigurieren",
+      "automatik_settings": {
+        "title": "Automatik-Einstellungen",
         "data": {
           "normal_window_start": "Filterbetrieb Start",
           "normal_window_end": "Filterbetrieb Ende",
-          "normal_speed": "Filterbetrieb Drehzahl",
-          "backwash_duration": "Rückspülen Dauer",
-          "backwash_speed": "Rückspülen Drehzahl",
-          "rinse_duration": "Nachspülen Dauer",
-          "rinse_speed": "Nachspülen Drehzahl"
+          "normal_speed": "Filterbetrieb Drehzahl"
+        }
+      },
+      "add_program": {
+        "title": "Programm hinzufügen",
+        "data": {
+          "name": "Programmname",
+          "speed": "Drehzahl",
+          "duration_min": "Dauer (0 = manuell stoppen)"
+        }
+      },
+      "remove_program": {
+        "title": "Programm entfernen",
+        "data": {
+          "program": "Programm"
         }
       },
       "winter_thresholds": {
@@ -35,10 +45,9 @@
       },
       "add_threshold": {
         "title": "Frostschutz-Schwelle hinzufügen",
-        "description": "Intervall und Dauer auf 0 setzen für durchgängigen Betrieb.",
+        "description": "Intervall und Dauer auf 0 = durchgängig.",
         "data": {
-          "temp_from": "Temperatur von",
-          "temp_to": "Temperatur bis",
+          "below_temp": "Unter Temperatur",
           "interval_min": "Intervall",
           "duration_min": "Laufzeit",
           "speed": "Drehzahl"

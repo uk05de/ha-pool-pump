@@ -25,35 +25,33 @@ MIN_PAUSE_MINUTES = 30      # minutes: below this, don't bother pausing — run 
 CONF_NORMAL_WINDOW_START = "normal_window_start"
 CONF_NORMAL_WINDOW_END = "normal_window_end"
 CONF_NORMAL_SPEED = "normal_speed"
-CONF_NORMAL_TEMP_DIVISOR = "normal_temp_divisor"  # runtime = water_temp / divisor
+CONF_NORMAL_TEMP_DIVISOR = "normal_temp_divisor"
 
-# Options keys — backwash / rinse
-CONF_BACKWASH_DURATION = "backwash_duration"
-CONF_BACKWASH_SPEED = "backwash_speed"
-CONF_RINSE_DURATION = "rinse_duration"
-CONF_RINSE_SPEED = "rinse_speed"
+# Options keys — user-defined programs
+CONF_PROGRAMS = "programs"
+# Each: {name, speed, duration_min}  (duration_min=0 → runs until manually stopped)
 
-# Options keys — winter / frost protection
+# Options keys — frost protection
 CONF_WINTER_OVERRIDE = "winter_override"
 CONF_WINTER_THRESHOLDS = "winter_thresholds"
-# Each threshold: {below_temp, interval_min, duration_min, speed}
-# interval_min=0 + duration_min=0 means continuous operation
-
-# Options keys — automation
-CONF_AUTOMATION_ENABLED = "automation_enabled"
+# Each: {below_temp, interval_min, duration_min, speed}
+# interval_min=0 + duration_min=0 → continuous
 
 # Options keys — test/debug
 CONF_TEST_MODE = "test_mode"
 
-# Operational modes (automatic, not user-selected)
-MODE_OFF = "off"
-MODE_NORMAL = "normal"
-MODE_FROST = "frost_protection"
-MODE_BACKWASH = "backwash"
-MODE_RINSE = "rinse"
+# Mode identifiers
 MODE_MANUAL = "manual"
+MODE_AUTOMATIK = "automatik"
 
-# Default winter thresholds (sorted descending by below_temp)
+# Default programs
+DEFAULT_PROGRAMS = [
+    {"name": "Backwash", "speed": 70, "duration_min": 3},
+    {"name": "Nachspülen", "speed": 50, "duration_min": 1},
+    {"name": "Reinigen", "speed": 40, "duration_min": 5},
+]
+
+# Default frost thresholds
 DEFAULT_THRESHOLDS = [
     {"below_temp": 4, "interval_min": 120, "duration_min": 15, "speed": 20},
     {"below_temp": 2, "interval_min": 60, "duration_min": 20, "speed": 25},

@@ -1,4 +1,4 @@
-"""Pool Pump sensors — temperatures and status."""
+"""Pool Pump sensors — status, mode, temperatures."""
 
 import logging
 
@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, MODE_AUTOMATIK
 from .coordinator import PoolPumpCoordinator
 
 log = logging.getLogger(__name__)
@@ -60,14 +60,13 @@ class PoolPumpStatus(_Base):
 
     @property
     def native_value(self) -> str:
-        c = self._coordinator
-        if not c.running:
+        if not self._coordinator.running:
             return "stopped"
-        return f"running ({c.target_speed:.0f}%)"
+        return f"running ({self._coordinator.target_speed:.0f}%)"
 
 
 class PoolPumpMode(_Base):
-    """Current operating mode (automatic, read-only)."""
+    """Shows active program or manual."""
 
     _attr_name = "Mode"
     _attr_icon = "mdi:auto-fix"
@@ -78,14 +77,19 @@ class PoolPumpMode(_Base):
 
     @property
     def native_value(self) -> str:
-        return self._coordinator.mode
+        prog = self._coordinator.active_program
+        if prog is None:
+            return "manual"
+        if prog == MODE_AUTOMATIK:
+            sub = self._coordinator.auto_sub_mode
+            if sub:
+                return f"automatik ({sub})"
+            return "automatik"
+        return prog
 
 
 class TestModeSensor(_Base):
-    """Shows whether test mode is active (read-only, configured via options)."""
-
     _attr_name = "Test mode"
-    _attr_icon = "mdi:test-tube"
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
@@ -97,7 +101,7 @@ class TestModeSensor(_Base):
 
     @property
     def icon(self) -> str:
-        return "mdi:test-tube-off" if not self._coordinator.test_mode else "mdi:test-tube"
+        return "mdi:test-tube" if self._coordinator.test_mode else "mdi:test-tube-off"
 
 
 class _TempBase(_Base):
@@ -114,7 +118,7 @@ class OutsideTemperature(_TempBase):
         self._attr_unique_id = f"{entry.entry_id}_outside_temp"
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self):
         return self._coordinator.outside_temperature
 
 
@@ -127,7 +131,7 @@ class LiveWaterTemperature(_TempBase):
         self._attr_unique_id = f"{entry.entry_id}_water_temp_live"
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self):
         return self._coordinator.water_temperature
 
 
@@ -140,7 +144,7 @@ class BufferedWaterTemp(_TempBase):
         self._attr_unique_id = f"{entry.entry_id}_water_temp_buffered"
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self):
         return self._coordinator.buffered_water_temp
 
 
@@ -153,5 +157,5 @@ class RoomTemperature(_TempBase):
         self._attr_unique_id = f"{entry.entry_id}_room_temp"
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self):
         return self._coordinator.room_temperature

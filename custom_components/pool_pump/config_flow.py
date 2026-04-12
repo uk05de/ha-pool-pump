@@ -19,10 +19,8 @@ from .const import (
     CONF_NORMAL_WINDOW_START,
     CONF_NORMAL_WINDOW_END,
     CONF_NORMAL_SPEED,
-    CONF_BACKWASH_DURATION,
-    CONF_BACKWASH_SPEED,
-    CONF_RINSE_DURATION,
-    CONF_RINSE_SPEED,
+    CONF_PROGRAMS,
+    DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
 )
 
@@ -33,12 +31,14 @@ class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input=None):
-        """Initial step — pick the Shellys and sensors."""
         if user_input is not None:
             return self.async_create_entry(
                 title="Pool Pump",
                 data=user_input,
-                options={CONF_WINTER_THRESHOLDS: DEFAULT_THRESHOLDS},
+                options={
+                    CONF_WINTER_THRESHOLDS: DEFAULT_THRESHOLDS,
+                    CONF_PROGRAMS: DEFAULT_PROGRAMS,
+                },
             )
 
         schema = vol.Schema({
@@ -53,22 +53,14 @@ class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             vol.Optional(CONF_OUTSIDE_TEMPS, default=[]): selector.EntitySelector(
                 selector.EntitySelectorConfig(
-                    domain="sensor",
-                    device_class="temperature",
-                    multiple=True,
+                    domain="sensor", device_class="temperature", multiple=True,
                 ),
             ),
             vol.Optional(CONF_WATER_TEMP): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor",
-                    device_class="temperature",
-                ),
+                selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
             ),
             vol.Optional(CONF_ROOM_TEMP): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor",
-                    device_class="temperature",
-                ),
+                selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
             ),
         })
 
@@ -81,17 +73,18 @@ class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class PoolPumpOptionsFlow(config_entries.OptionsFlow):
-    """Handle options — programs, thresholds, test mode."""
+    """Handle options — automatik settings, programs, thresholds, test."""
 
     def __init__(self, config_entry):
         self._entry = config_entry
 
     async def async_step_init(self, user_input=None):
-        """Options menu."""
         return self.async_show_menu(
             step_id="init",
             menu_options={
-                "programs": "Programme (Normal, Rückspülen, Nachspülen)",
+                "automatik_settings": "Automatik-Einstellungen",
+                "add_program": "Programm hinzufügen",
+                "remove_program": "Programm entfernen",
                 "winter_thresholds": "Frostschutz-Schwellen anzeigen",
                 "add_threshold": "Frostschutz-Schwelle hinzufügen",
                 "remove_threshold": "Frostschutz-Schwelle entfernen",
@@ -99,39 +92,73 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             },
         )
 
-    # --- Normal / Backwash / Rinse ---
+    # --- Automatik settings ---
 
-    async def async_step_programs(self, user_input=None):
-        """Configure normal/backwash/rinse."""
+    async def async_step_automatik_settings(self, user_input=None):
         if user_input is not None:
             options = dict(self._entry.options)
             options.update(user_input)
             return self.async_create_entry(title="", data=options)
 
         opts = self._entry.options
-        speed_selector = lambda default: selector.NumberSelector(
-            selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
-        )
-        duration_selector = lambda: selector.NumberSelector(
-            selector.NumberSelectorConfig(min=1, max=30, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
-        )
-
         schema = vol.Schema({
             vol.Required(CONF_NORMAL_WINDOW_START, default=opts.get(CONF_NORMAL_WINDOW_START, "08:00:00")): selector.TimeSelector(),
             vol.Required(CONF_NORMAL_WINDOW_END, default=opts.get(CONF_NORMAL_WINDOW_END, "22:00:00")): selector.TimeSelector(),
-            vol.Required(CONF_NORMAL_SPEED, default=opts.get(CONF_NORMAL_SPEED, 30)): speed_selector(30),
-            vol.Required(CONF_BACKWASH_DURATION, default=opts.get(CONF_BACKWASH_DURATION, 3)): duration_selector(),
-            vol.Required(CONF_BACKWASH_SPEED, default=opts.get(CONF_BACKWASH_SPEED, 70)): speed_selector(70),
-            vol.Required(CONF_RINSE_DURATION, default=opts.get(CONF_RINSE_DURATION, 1)): duration_selector(),
-            vol.Required(CONF_RINSE_SPEED, default=opts.get(CONF_RINSE_SPEED, 50)): speed_selector(50),
+            vol.Required(CONF_NORMAL_SPEED, default=opts.get(CONF_NORMAL_SPEED, 30)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
+            ),
         })
 
-        return self.async_show_form(step_id="programs", data_schema=schema)
+        return self.async_show_form(step_id="automatik_settings", data_schema=schema)
 
-    # --- Winter Thresholds ---
+    # --- User-defined programs ---
+
+    async def async_step_add_program(self, user_input=None):
+        if user_input is not None:
+            programs = list(self._entry.options.get(CONF_PROGRAMS, DEFAULT_PROGRAMS))
+            programs.append({
+                "name": user_input["name"],
+                "speed": int(user_input["speed"]),
+                "duration_min": int(user_input["duration_min"]),
+            })
+            options = dict(self._entry.options)
+            options[CONF_PROGRAMS] = programs
+            return self.async_create_entry(title="", data=options)
+
+        schema = vol.Schema({
+            vol.Required("name"): str,
+            vol.Required("speed", default=50): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("duration_min", default=5): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=120, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+            ),
+        })
+
+        return self.async_show_form(step_id="add_program", data_schema=schema)
+
+    async def async_step_remove_program(self, user_input=None):
+        programs = list(self._entry.options.get(CONF_PROGRAMS, DEFAULT_PROGRAMS))
+
+        if user_input is not None:
+            name = user_input["program"]
+            programs = [p for p in programs if p["name"] != name]
+            options = dict(self._entry.options)
+            options[CONF_PROGRAMS] = programs
+            return self.async_create_entry(title="", data=options)
+
+        labels = {p["name"]: p["name"] for p in programs}
+        if not labels:
+            return self.async_abort(reason="no_programs")
+
+        return self.async_show_form(
+            step_id="remove_program",
+            data_schema=vol.Schema({vol.Required("program"): vol.In(labels)}),
+        )
+
+    # --- Winter thresholds ---
 
     async def async_step_winter_thresholds(self, user_input=None):
-        """Show current thresholds — click OK to go back."""
         if user_input is not None:
             return await self.async_step_init()
 
@@ -144,15 +171,9 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             lines = []
             for t in thresholds_sorted:
                 if t["interval_min"] == 0 and t["duration_min"] == 0:
-                    lines.append(
-                        f"Unter {t['below_temp']}°C → "
-                        f"durchgängig bei {t['speed']}%"
-                    )
+                    lines.append(f"Unter {t['below_temp']}°C → durchgängig bei {t['speed']}%")
                 else:
-                    lines.append(
-                        f"Unter {t['below_temp']}°C → "
-                        f"alle {t['interval_min']}min für {t['duration_min']}min bei {t['speed']}%"
-                    )
+                    lines.append(f"Unter {t['below_temp']}°C → alle {t['interval_min']}min für {t['duration_min']}min bei {t['speed']}%")
             desc = " | ".join(lines)
 
         return self.async_show_form(
@@ -162,7 +183,6 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_add_threshold(self, user_input=None):
-        """Add a new frost threshold."""
         if user_input is not None:
             thresholds = list(self._entry.options.get(CONF_WINTER_THRESHOLDS, DEFAULT_THRESHOLDS))
             thresholds.append({
@@ -194,30 +214,23 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(step_id="add_threshold", data_schema=schema)
 
     async def async_step_remove_threshold(self, user_input=None):
-        """Remove a frost threshold."""
         thresholds = list(self._entry.options.get(CONF_WINTER_THRESHOLDS, DEFAULT_THRESHOLDS))
 
         if user_input is not None:
             label = user_input["threshold"]
-            thresholds = [t for t in thresholds
-                          if f"Unter {t['below_temp']}°C" != label]
+            thresholds = [t for t in thresholds if f"Unter {t['below_temp']}°C" != label]
             options = dict(self._entry.options)
             options[CONF_WINTER_THRESHOLDS] = thresholds
             return self.async_create_entry(title="", data=options)
 
-        labels = {
-            f"Unter {t['below_temp']}°C": f"Unter {t['below_temp']}°C"
-            for t in thresholds
-        }
-
+        labels = {f"Unter {t['below_temp']}°C": f"Unter {t['below_temp']}°C" for t in thresholds}
         if not labels:
             return self.async_abort(reason="no_thresholds")
 
-        schema = vol.Schema({
-            vol.Required("threshold"): vol.In(labels),
-        })
-
-        return self.async_show_form(step_id="remove_threshold", data_schema=schema)
+        return self.async_show_form(
+            step_id="remove_threshold",
+            data_schema=vol.Schema({vol.Required("threshold"): vol.In(labels)}),
+        )
 
     # --- Test mode ---
 
@@ -227,11 +240,9 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             options[CONF_TEST_MODE] = user_input[CONF_TEST_MODE]
             return self.async_create_entry(title="", data=options)
 
-        schema = vol.Schema({
-            vol.Required(
-                CONF_TEST_MODE,
-                default=self._entry.options.get(CONF_TEST_MODE, False),
-            ): bool,
-        })
-
-        return self.async_show_form(step_id="test", data_schema=schema)
+        return self.async_show_form(
+            step_id="test",
+            data_schema=vol.Schema({
+                vol.Required(CONF_TEST_MODE, default=self._entry.options.get(CONF_TEST_MODE, False)): bool,
+            }),
+        )

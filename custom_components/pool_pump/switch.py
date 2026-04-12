@@ -1,4 +1,4 @@
-"""Pool Pump switches — master on/off and winter override."""
+"""Pool Pump switches — pump, program switches, winter override."""
 
 import logging
 
@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, CONF_AUTOMATION_ENABLED, MODE_MANUAL, MODE_OFF
+from .const import DOMAIN, CONF_PROGRAMS, CONF_WINTER_OVERRIDE, DEFAULT_PROGRAMS, MODE_AUTOMATIK
 from .coordinator import PoolPumpCoordinator
 
 log = logging.getLogger(__name__)
@@ -19,34 +19,50 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: PoolPumpCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
-        PoolPumpSwitch(coordinator, entry),
-        AutomationSwitch(coordinator, entry),
+
+    entities = [
+        PumpSwitch(coordinator, entry),
+        AutomatikProgramSwitch(coordinator, entry),
         WinterOverrideSwitch(coordinator, entry),
-    ])
+    ]
+
+    # Create a switch for each user-defined program
+    for prog in coordinator.programs:
+        entities.append(TimedProgramSwitch(coordinator, entry, prog))
+
+    async_add_entities(entities)
 
 
-class PoolPumpSwitch(SwitchEntity):
-    """Master switch — manual on/off, bypasses scheduler."""
-
+class _BaseSwitch(SwitchEntity):
     _attr_has_entity_name = True
-    _attr_name = "Pump"
-    _attr_icon = "mdi:pump"
 
     def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
         self._coordinator = coordinator
-        self._attr_unique_id = f"{entry.entry_id}_switch"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "Pool Pump",
-            "manufacturer": "DAB",
-        }
+        self._entry = entry
+        self._attr_device_info = {"identifiers": {(DOMAIN, entry.entry_id)}}
 
     async def async_added_to_hass(self) -> None:
         self._coordinator.add_listener(self.async_write_ha_state)
 
     async def async_will_remove_from_hass(self) -> None:
         self._coordinator.remove_listener(self.async_write_ha_state)
+
+
+class PumpSwitch(_BaseSwitch):
+    """Manual pump on/off. Turning off cancels any active program."""
+
+    _attr_name = "Pump"
+    _attr_icon = "mdi:pump"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_switch"
+        # Set device info with name here (primary entity)
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "Pool Pump",
+            "manufacturer": "DAB",
+        }
 
     @property
     def is_on(self) -> bool:
@@ -54,72 +70,65 @@ class PoolPumpSwitch(SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         speed = self._coordinator.target_speed or self._coordinator.normal_speed
-        await self._coordinator.async_set_mode(MODE_MANUAL)
         await self._coordinator.async_ensure_running(speed)
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self._coordinator.async_ensure_stopped()
-        await self._coordinator.async_set_mode(MODE_OFF)
-        # Immediately re-evaluate so automatic mode takes over
-        await self._coordinator.async_evaluate_now()
+        await self._coordinator.async_pump_switch_off()
 
 
-class AutomationSwitch(SwitchEntity):
-    """Enable/disable all automatic control."""
+class AutomatikProgramSwitch(_BaseSwitch):
+    """Activates the automatic scheduler (normal + frost protection)."""
 
-    _attr_has_entity_name = True
-    _attr_name = "Automation"
+    _attr_name = "Programm Automatik"
     _attr_icon = "mdi:robot"
 
-    def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
-        self._coordinator = coordinator
-        self._entry = entry
-        self._attr_unique_id = f"{entry.entry_id}_automation"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-        }
-
-    async def async_added_to_hass(self) -> None:
-        self._coordinator.add_listener(self.async_write_ha_state)
-
-    async def async_will_remove_from_hass(self) -> None:
-        self._coordinator.remove_listener(self.async_write_ha_state)
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_prog_automatik"
 
     @property
     def is_on(self) -> bool:
-        return self._coordinator.automation_enabled
+        return self._coordinator.is_program_active(MODE_AUTOMATIK)
 
     async def async_turn_on(self, **kwargs) -> None:
-        self.hass.config_entries.async_update_entry(
-            self._entry, options={**self._entry.options, CONF_AUTOMATION_ENABLED: True}
-        )
+        await self._coordinator.async_activate_program(MODE_AUTOMATIK)
 
     async def async_turn_off(self, **kwargs) -> None:
-        self.hass.config_entries.async_update_entry(
-            self._entry, options={**self._entry.options, CONF_AUTOMATION_ENABLED: False}
-        )
+        await self._coordinator.async_deactivate_program(MODE_AUTOMATIK)
 
 
-class WinterOverrideSwitch(SwitchEntity):
+class TimedProgramSwitch(_BaseSwitch):
+    """Switch for a user-defined timed program (backwash, rinse, etc.)."""
+
+    def __init__(self, coordinator, entry, program: dict):
+        super().__init__(coordinator, entry)
+        self._program_name = program["name"]
+        self._attr_name = f"Programm {program['name']}"
+        self._attr_icon = "mdi:playlist-play"
+        # Slug for unique_id
+        slug = program["name"].lower().replace(" ", "_").replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+        self._attr_unique_id = f"{entry.entry_id}_prog_{slug}"
+
+    @property
+    def is_on(self) -> bool:
+        return self._coordinator.is_program_active(self._program_name)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._coordinator.async_activate_program(self._program_name)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._coordinator.async_deactivate_program(self._program_name)
+
+
+class WinterOverrideSwitch(_BaseSwitch):
     """Force frost protection regardless of temperatures."""
 
-    _attr_has_entity_name = True
-    _attr_name = "Winter override"
+    _attr_name = "Wintermodus erzwingen"
     _attr_icon = "mdi:snowflake-alert"
 
-    def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
-        self._coordinator = coordinator
-        self._entry = entry
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_winter_override"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-        }
-
-    async def async_added_to_hass(self) -> None:
-        self._coordinator.add_listener(self.async_write_ha_state)
-
-    async def async_will_remove_from_hass(self) -> None:
-        self._coordinator.remove_listener(self.async_write_ha_state)
 
     @property
     def is_on(self) -> bool:
@@ -127,10 +136,10 @@ class WinterOverrideSwitch(SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         self.hass.config_entries.async_update_entry(
-            self._entry, options={**self._entry.options, "winter_override": True}
+            self._entry, options={**self._entry.options, CONF_WINTER_OVERRIDE: True}
         )
 
     async def async_turn_off(self, **kwargs) -> None:
         self.hass.config_entries.async_update_entry(
-            self._entry, options={**self._entry.options, "winter_override": False}
+            self._entry, options={**self._entry.options, CONF_WINTER_OVERRIDE: False}
         )
