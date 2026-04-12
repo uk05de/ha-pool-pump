@@ -23,6 +23,7 @@ async def async_setup_entry(
         PoolPumpStatus(coordinator, entry),
         PoolPumpMode(coordinator, entry),
         TestModeSensor(coordinator, entry),
+        BackwashCountdown(coordinator, entry),
         BufferedWaterTemp(coordinator, entry),
     ]
 
@@ -102,6 +103,41 @@ class TestModeSensor(_Base):
     @property
     def icon(self) -> str:
         return "mdi:test-tube" if self._coordinator.test_mode else "mdi:test-tube-off"
+
+
+class BackwashCountdown(_Base):
+    """Days since last backwash / days remaining until due."""
+
+    _attr_name = "Backwash"
+    _attr_icon = "mdi:filter-outline"
+    _attr_native_unit_of_measurement = "days"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_backwash_countdown"
+
+    @property
+    def native_value(self) -> int | None:
+        days = self._coordinator.days_since_backwash
+        if days is None:
+            return None
+        remaining = self._coordinator.backwash_interval_days - days
+        return remaining
+
+    @property
+    def icon(self) -> str:
+        if self._coordinator.backwash_overdue:
+            return "mdi:filter-remove"
+        return "mdi:filter-outline"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "days_since_backwash": self._coordinator.days_since_backwash,
+            "interval_days": self._coordinator.backwash_interval_days,
+            "overdue": self._coordinator.backwash_overdue,
+            "last_backwash": self._coordinator._last_backwash_date,
+        }
 
 
 class _TempBase(_Base):

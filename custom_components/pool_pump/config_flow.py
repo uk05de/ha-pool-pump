@@ -20,6 +20,9 @@ from .const import (
     CONF_NORMAL_WINDOW_END,
     CONF_NORMAL_SPEED,
     CONF_PROGRAMS,
+    CONF_BACKWASH_INTERVAL_DAYS,
+    CONF_BACKWASH_PROGRAM_NAME,
+    DEFAULT_BACKWASH_INTERVAL,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
 )
@@ -110,6 +113,10 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             vol.Required(CONF_NORMAL_SPEED, default=opts.get(CONF_NORMAL_SPEED, 30)): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
             ),
+            vol.Required(CONF_BACKWASH_INTERVAL_DAYS, default=opts.get(CONF_BACKWASH_INTERVAL_DAYS, DEFAULT_BACKWASH_INTERVAL)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=60, step=1, unit_of_measurement="Tage", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(CONF_BACKWASH_PROGRAM_NAME, default=opts.get(CONF_BACKWASH_PROGRAM_NAME, "Backwash")): str,
         })
 
         return self.async_show_form(step_id="automatik_settings", data_schema=schema)

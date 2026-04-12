@@ -31,6 +31,11 @@ CONF_NORMAL_TEMP_DIVISOR = "normal_temp_divisor"
 CONF_PROGRAMS = "programs"
 # Each: {name, speed, duration_min}  (duration_min=0 → runs until manually stopped)
 
+# Options keys — backwash reminder
+CONF_BACKWASH_INTERVAL_DAYS = "backwash_interval_days"
+CONF_BACKWASH_PROGRAM_NAME = "backwash_program_name"
+DEFAULT_BACKWASH_INTERVAL = 14
+
 # Options keys — frost protection
 CONF_WINTER_OVERRIDE = "winter_override"
 CONF_WINTER_THRESHOLDS = "winter_thresholds"

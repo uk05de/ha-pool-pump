@@ -25,6 +25,9 @@ from .const import (
     CONF_NORMAL_SPEED,
     CONF_NORMAL_TEMP_DIVISOR,
     CONF_PROGRAMS,
+    CONF_BACKWASH_INTERVAL_DAYS,
+    CONF_BACKWASH_PROGRAM_NAME,
+    DEFAULT_BACKWASH_INTERVAL,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
     POWER_ON_DELAY,
@@ -75,6 +78,10 @@ class PoolPumpCoordinator:
 
         # Automatik sub-mode (normal vs frost — only relevant when automatik is active)
         self._auto_sub_mode: str | None = None  # "normal" or "frost_protection"
+
+        # Backwash reminder
+        self._last_backwash_date: str | None = None  # ISO date string
+        self._last_notification_date: str | None = None  # prevent daily spam
 
         # Tasks
         self._scheduler_task: asyncio.Task | None = None
@@ -143,6 +150,31 @@ class PoolPumpCoordinator:
     def buffered_water_temp(self) -> float | None:
         return self._buffered_water_temp
 
+    @property
+    def backwash_interval_days(self) -> int:
+        return self.entry.options.get(CONF_BACKWASH_INTERVAL_DAYS, DEFAULT_BACKWASH_INTERVAL)
+
+    @property
+    def backwash_program_name(self) -> str:
+        return self.entry.options.get(CONF_BACKWASH_PROGRAM_NAME, "Backwash")
+
+    @property
+    def days_since_backwash(self) -> int | None:
+        if not self._last_backwash_date:
+            return None
+        try:
+            last = datetime.fromisoformat(self._last_backwash_date).date()
+            return (datetime.now().date() - last).days
+        except ValueError:
+            return None
+
+    @property
+    def backwash_overdue(self) -> bool:
+        days = self.days_since_backwash
+        if days is None:
+            return True  # never done → overdue
+        return days >= self.backwash_interval_days
+
     # --- Temperature reading ---
 
     def _read_temp(self, entity_id: str | None) -> float | None:
@@ -178,7 +210,9 @@ class PoolPumpCoordinator:
         stored = await self._store.async_load()
         if stored:
             self._buffered_water_temp = stored.get("buffered_water_temp")
-            log.info("Restored buffered water temp: %s°C", self._buffered_water_temp)
+            self._last_backwash_date = stored.get("last_backwash_date")
+            log.info("Restored buffered water temp: %s°C, last backwash: %s",
+                     self._buffered_water_temp, self._last_backwash_date)
         self._scheduler_task = self.entry.async_create_background_task(
             self.hass, self._scheduler_loop(), "pool_pump_scheduler"
         )
@@ -193,7 +227,10 @@ class PoolPumpCoordinator:
         log.info("Pool Pump coordinator stopped")
 
     async def _persist_state(self) -> None:
-        await self._store.async_save({"buffered_water_temp": self._buffered_water_temp})
+        await self._store.async_save({
+            "buffered_water_temp": self._buffered_water_temp,
+            "last_backwash_date": self._last_backwash_date,
+        })
 
     # --- Program switching ---
 
@@ -256,6 +293,9 @@ class PoolPumpCoordinator:
         log.info("Program '%s' finished after %.0fs", program_name, duration)
         await self._sample_water_temp_if_eligible()
         await self.async_ensure_stopped()
+        # Check if this was the backwash program → reset counter
+        if program_name == self.backwash_program_name:
+            await self.async_reset_backwash_counter()
         # Deactivate the program switch — back to manual
         self._active_program = None
         self._program_task = None
@@ -285,9 +325,27 @@ class PoolPumpCoordinator:
             try:
                 if self._active_program == MODE_AUTOMATIK:
                     await self._evaluate()
+                await self._check_backwash_reminder()
             except Exception:
                 log.exception("Scheduler error")
             await asyncio.sleep(SCHEDULER_INTERVAL)
+
+    async def _check_backwash_reminder(self) -> None:
+        """Send daily notification if backwash is overdue."""
+        if not self.backwash_overdue:
+            return
+        today = datetime.now().date().isoformat()
+        if self._last_notification_date == today:
+            return  # already notified today
+        self._last_notification_date = today
+        days = self.days_since_backwash
+        msg = f"Rückspülung fällig! Letzte Rückspülung vor {days} Tagen." if days else "Rückspülung fällig! Noch nie durchgeführt."
+        await self.hass.services.async_call(
+            "persistent_notification", "create",
+            {"title": "Pool Pump — Rückspülung", "message": msg, "notification_id": "pool_pump_backwash"},
+            blocking=False,
+        )
+        log.info("Backwash reminder sent: %s", msg)
 
     async def _evaluate(self) -> None:
         """Decide what automatik should do right now."""
@@ -529,6 +587,16 @@ class PoolPumpCoordinator:
             await self._set_speed_entity(speed)
             self._target_speed = speed
             self._notify()
+
+    # --- Backwash counter ---
+
+    async def async_reset_backwash_counter(self) -> None:
+        """Reset the backwash counter to today."""
+        self._last_backwash_date = datetime.now().date().isoformat()
+        self._last_notification_date = None
+        await self._persist_state()
+        self._notify()
+        log.info("Backwash counter reset to %s", self._last_backwash_date)
 
     # --- Listener pattern ---
 

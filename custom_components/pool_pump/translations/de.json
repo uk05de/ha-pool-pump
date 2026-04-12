@@ -22,7 +22,9 @@
         "data": {
           "normal_window_start": "Filterbetrieb Start",
           "normal_window_end": "Filterbetrieb Ende",
-          "normal_speed": "Filterbetrieb Drehzahl"
+          "normal_speed": "Filterbetrieb Drehzahl",
+          "backwash_interval_days": "Rückspül-Intervall",
+          "backwash_program_name": "Name des Rückspül-Programms"
         }
       },
       "show_programs": {
