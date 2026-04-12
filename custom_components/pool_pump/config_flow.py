@@ -109,17 +109,36 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=options)
 
         opts = self._entry.options
+        speed_selector = lambda default: selector.NumberSelector(
+            selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
+        )
+        duration_selector = lambda: selector.NumberSelector(
+            selector.NumberSelectorConfig(min=1, max=30, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+        )
+
         schema = vol.Schema({
             vol.Required(CONF_NORMAL_WINDOW_START, default=opts.get(CONF_NORMAL_WINDOW_START, "08:00:00")): selector.TimeSelector(),
             vol.Required(CONF_NORMAL_WINDOW_END, default=opts.get(CONF_NORMAL_WINDOW_END, "22:00:00")): selector.TimeSelector(),
-            vol.Required(CONF_NORMAL_SPEED, default=opts.get(CONF_NORMAL_SPEED, 30)): vol.All(int, vol.Range(min=5, max=100)),
-            vol.Required(CONF_BACKWASH_DURATION, default=opts.get(CONF_BACKWASH_DURATION, 3)): vol.All(int, vol.Range(min=1, max=30)),
-            vol.Required(CONF_BACKWASH_SPEED, default=opts.get(CONF_BACKWASH_SPEED, 70)): vol.All(int, vol.Range(min=10, max=100)),
-            vol.Required(CONF_RINSE_DURATION, default=opts.get(CONF_RINSE_DURATION, 1)): vol.All(int, vol.Range(min=1, max=30)),
-            vol.Required(CONF_RINSE_SPEED, default=opts.get(CONF_RINSE_SPEED, 50)): vol.All(int, vol.Range(min=10, max=100)),
+            vol.Required(CONF_NORMAL_SPEED, default=opts.get(CONF_NORMAL_SPEED, 30)): speed_selector(30),
+            vol.Required(CONF_BACKWASH_DURATION, default=opts.get(CONF_BACKWASH_DURATION, 3)): duration_selector(),
+            vol.Required(CONF_BACKWASH_SPEED, default=opts.get(CONF_BACKWASH_SPEED, 70)): speed_selector(70),
+            vol.Required(CONF_RINSE_DURATION, default=opts.get(CONF_RINSE_DURATION, 1)): duration_selector(),
+            vol.Required(CONF_RINSE_SPEED, default=opts.get(CONF_RINSE_SPEED, 50)): speed_selector(50),
         })
 
-        return self.async_show_form(step_id="programs", data_schema=schema)
+        return self.async_show_form(
+            step_id="programs",
+            data_schema=schema,
+            data_description={
+                CONF_NORMAL_WINDOW_START: "Startzeit des täglichen Filterbetriebs",
+                CONF_NORMAL_WINDOW_END: "Endzeit des täglichen Filterbetriebs",
+                CONF_NORMAL_SPEED: "Pumpengeschwindigkeit im Normalbetrieb",
+                CONF_BACKWASH_DURATION: "Dauer der Rückspülung",
+                CONF_BACKWASH_SPEED: "Pumpengeschwindigkeit bei Rückspülung",
+                CONF_RINSE_DURATION: "Dauer des Nachspülens",
+                CONF_RINSE_SPEED: "Pumpengeschwindigkeit beim Nachspülen",
+            },
+        )
 
     # --- Winter Thresholds ---
 
@@ -160,14 +179,34 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=options)
 
         schema = vol.Schema({
-            vol.Required("temp_from", default=0): vol.Coerce(int),
-            vol.Required("temp_to", default=-5): vol.Coerce(int),
-            vol.Required("interval_min", default=60): vol.All(int, vol.Range(min=0, max=480)),
-            vol.Required("duration_min", default=20): vol.All(int, vol.Range(min=0, max=120)),
-            vol.Required("speed", default=30): vol.All(int, vol.Range(min=5, max=100)),
+            vol.Required("temp_from", default=0): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=-30, max=10, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("temp_to", default=-5): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=-30, max=10, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("interval_min", default=60): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=480, step=5, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("duration_min", default=20): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=120, step=5, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required("speed", default=30): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
+            ),
         })
 
-        return self.async_show_form(step_id="add_threshold", data_schema=schema)
+        return self.async_show_form(
+            step_id="add_threshold",
+            data_schema=schema,
+            data_description={
+                "temp_from": "Obere Temperaturgrenze der Schwelle",
+                "temp_to": "Untere Temperaturgrenze der Schwelle",
+                "interval_min": "Alle X Minuten laufen lassen (0 = durchgängig)",
+                "duration_min": "Laufzeit pro Intervall (0 = durchgängig)",
+                "speed": "Pumpengeschwindigkeit in dieser Schwelle",
+            },
+        )
 
     async def async_step_remove_threshold(self, user_input=None):
         """Remove a frost threshold."""
