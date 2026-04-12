@@ -268,7 +268,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
 
         schema = vol.Schema({
             vol.Required("below_temp", default=0): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=-30, max=10, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
+                selector.NumberSelectorConfig(min=-30, max=40, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required("interval_min", default=60): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=480, step=5, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
@@ -323,7 +323,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
 
         schema = vol.Schema({
             vol.Required("below_temp", default=threshold["below_temp"]): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=-30, max=10, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
+                selector.NumberSelectorConfig(min=-30, max=40, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required("interval_min", default=threshold["interval_min"]): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=480, step=5, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
