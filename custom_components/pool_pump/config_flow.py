@@ -139,16 +139,16 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         if not thresholds:
             desc = "Keine Schwellen konfiguriert."
         else:
-            lines = []
+            lines = [f"**{len(thresholds)} Schwellen konfiguriert:**\n"]
             for t in thresholds:
                 if t["interval_min"] == 0 and t["duration_min"] == 0:
                     lines.append(
-                        f"{t['temp_from']}°C bis {t['temp_to']}°C → "
+                        f"- {t['temp_from']}°C bis {t['temp_to']}°C → "
                         f"durchgängig bei {t['speed']}%"
                     )
                 else:
                     lines.append(
-                        f"{t['temp_from']}°C bis {t['temp_to']}°C → "
+                        f"- {t['temp_from']}°C bis {t['temp_to']}°C → "
                         f"alle {t['interval_min']}min für {t['duration_min']}min bei {t['speed']}%"
                     )
             desc = "\n".join(lines)
@@ -156,7 +156,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="winter_thresholds",
             data_schema=vol.Schema({}),
-            description_placeholders={"thresholds": desc, "count": str(len(thresholds))},
+            description=desc,
         )
 
     async def async_step_add_threshold(self, user_input=None):
