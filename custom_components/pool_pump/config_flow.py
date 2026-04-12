@@ -90,7 +90,13 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         """Options menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["programs", "winter_thresholds", "add_threshold", "remove_threshold", "test"],
+            menu_options={
+                "programs": "Programme (Normal, Rückspülen, Nachspülen)",
+                "winter_thresholds": "Frostschutz-Schwellen anzeigen",
+                "add_threshold": "Frostschutz-Schwelle hinzufügen",
+                "remove_threshold": "Frostschutz-Schwelle entfernen",
+                "test": "Testmodus",
+            },
         )
 
     # --- Normal / Backwash / Rinse ---
@@ -129,7 +135,10 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         )
         return self.async_show_menu(
             step_id="winter_thresholds",
-            menu_options=["add_threshold", "remove_threshold"],
+            menu_options={
+                "add_threshold": "Schwelle hinzufügen",
+                "remove_threshold": "Schwelle entfernen",
+            },
             description_placeholders={"thresholds": desc, "count": str(len(thresholds))},
         )
 
