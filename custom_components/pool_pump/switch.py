@@ -60,6 +60,8 @@ class PoolPumpSwitch(SwitchEntity):
     async def async_turn_off(self, **kwargs) -> None:
         await self._coordinator.async_ensure_stopped()
         await self._coordinator.async_set_mode(MODE_OFF)
+        # Immediately re-evaluate so automatic mode takes over
+        await self._coordinator.async_evaluate_now()
 
 
 class AutomationSwitch(SwitchEntity):

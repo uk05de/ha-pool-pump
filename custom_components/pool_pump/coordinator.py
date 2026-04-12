@@ -565,6 +565,11 @@ class PoolPumpCoordinator:
         self._notify()
         log.info("Mode set to %s", mode)
 
+    async def async_evaluate_now(self) -> None:
+        """Force immediate scheduler evaluation (e.g. after leaving manual mode)."""
+        log.info("Immediate evaluation triggered")
+        await self._evaluate()
+
     # --- Listener pattern ---
 
     def add_listener(self, update_callback) -> None:
