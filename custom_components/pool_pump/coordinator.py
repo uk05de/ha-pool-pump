@@ -423,19 +423,19 @@ class PoolPumpCoordinator:
                          threshold["below_temp"], threshold["speed"])
                 await self.async_set_speed(threshold["speed"])
 
-                if is_continuous:
-                    if self._program_task and not self._program_task.done():
-                        self._program_task.cancel()
-                        self._program_task = None
-                else:
-                    elapsed = time.monotonic() - self._frost_cycle_start if self._frost_cycle_start else 0
-                    remaining = max(0, threshold["duration_min"] * 60 - elapsed)
-                    if self._program_task and not self._program_task.done():
-                        self._program_task.cancel()
-                    if remaining > 0:
-                        self._program_task = self.entry.async_create_background_task(
-                            self.hass, self._frost_timed_stop(remaining), "pool_pump_frost"
-                        )
+                # Cycle restarts on threshold change — continuous has no duration,
+                # so its elapsed time must not count against an interval-mode timer.
+                if self._program_task and not self._program_task.done():
+                    self._program_task.cancel()
+                    self._program_task = None
+                self._frost_cycle_start = time.monotonic()
+
+                if not is_continuous:
+                    self._program_task = self.entry.async_create_background_task(
+                        self.hass,
+                        self._frost_timed_stop(threshold["duration_min"] * 60),
+                        "pool_pump_frost",
+                    )
             return
 
         # Not running — start if needed
