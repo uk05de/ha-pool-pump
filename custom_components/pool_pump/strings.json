@@ -13,7 +13,23 @@
           "room_temp": "Technikhaus-Temperatur",
           "freshwater_switch": "Frischwasser-Ventil (optional)"
         }
+      },
+      "reconfigure": {
+        "title": "Pool Pump neu konfigurieren",
+        "description": "Hardware-Entities und Sensoren anpassen — Programme und Einstellungen bleiben erhalten.",
+        "data": {
+          "power_switch": "Strom-Schalter (Shelly 1 PM)",
+          "speed_number": "Drehzahl-Regler (Shelly Dimmer 0-10V)",
+          "start_switch": "Start-Signal (Shelly 1)",
+          "outside_temps": "Außentemperatur-Sensoren",
+          "water_temp": "Wassertemperatur (Dosieranlage)",
+          "room_temp": "Technikhaus-Temperatur",
+          "freshwater_switch": "Frischwasser-Ventil (optional)"
+        }
       }
+    },
+    "abort": {
+      "reconfigure_successful": "Konfiguration aktualisiert."
     }
   },
   "options": {

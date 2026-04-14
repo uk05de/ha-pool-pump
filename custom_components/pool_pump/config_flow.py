@@ -31,6 +31,53 @@ from .const import (
 )
 
 
+def _build_setup_schema(defaults: dict | None = None) -> vol.Schema:
+    """Shared schema for initial setup and reconfigure.
+
+    Existing values from `defaults` are shown as suggested_value so the user
+    can edit them instead of re-entering everything.
+    """
+    d = defaults or {}
+
+    def _req(key):
+        if d.get(key) is not None:
+            return vol.Required(key, description={"suggested_value": d[key]})
+        return vol.Required(key)
+
+    def _opt(key, fallback=None):
+        if d.get(key) is not None:
+            return vol.Optional(key, description={"suggested_value": d[key]})
+        if fallback is not None:
+            return vol.Optional(key, default=fallback)
+        return vol.Optional(key)
+
+    return vol.Schema({
+        _req(CONF_POWER_SWITCH): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch"),
+        ),
+        _req(CONF_SPEED_NUMBER): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=["number", "light"]),
+        ),
+        _req(CONF_START_SWITCH): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch"),
+        ),
+        _opt(CONF_OUTSIDE_TEMPS, fallback=[]): selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain="sensor", device_class="temperature", multiple=True,
+            ),
+        ),
+        _opt(CONF_WATER_TEMP): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
+        ),
+        _opt(CONF_ROOM_TEMP): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
+        ),
+        _opt(CONF_FRESHWATER_SWITCH): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch"),
+        ),
+    })
+
+
 class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Pool Pump."""
 
@@ -47,33 +94,19 @@ class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 },
             )
 
-        schema = vol.Schema({
-            vol.Required(CONF_POWER_SWITCH): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="switch"),
-            ),
-            vol.Required(CONF_SPEED_NUMBER): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["number", "light"]),
-            ),
-            vol.Required(CONF_START_SWITCH): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="switch"),
-            ),
-            vol.Optional(CONF_OUTSIDE_TEMPS, default=[]): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor", device_class="temperature", multiple=True,
-                ),
-            ),
-            vol.Optional(CONF_WATER_TEMP): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
-            ),
-            vol.Optional(CONF_ROOM_TEMP): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
-            ),
-            vol.Optional(CONF_FRESHWATER_SWITCH): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="switch"),
-            ),
-        })
+        return self.async_show_form(step_id="user", data_schema=_build_setup_schema())
 
-        return self.async_show_form(step_id="user", data_schema=schema)
+    async def async_step_reconfigure(self, user_input=None):
+        """Allow the user to re-pick hardware entities without deleting the entry."""
+        entry = self._get_reconfigure_entry()
+
+        if user_input is not None:
+            return self.async_update_reload_and_abort(entry, data=user_input)
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_build_setup_schema(dict(entry.data)),
+        )
 
     @staticmethod
     @callback
