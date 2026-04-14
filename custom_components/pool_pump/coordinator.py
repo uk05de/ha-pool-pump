@@ -342,6 +342,9 @@ class PoolPumpCoordinator:
 
     async def _check_backwash_reminder(self) -> None:
         """Send daily notification if backwash is overdue."""
+        # Manual mode (e.g. winter shutdown, pool drained) → stay silent.
+        if self._active_program != MODE_AUTOMATIK:
+            return
         if not self.backwash_overdue:
             return
         today = datetime.now().date().isoformat()
