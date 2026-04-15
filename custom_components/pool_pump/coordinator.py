@@ -216,14 +216,25 @@ class PoolPumpCoordinator:
 
     async def async_setup(self) -> None:
         stored = await self._store.async_load()
+        restored_program: str | None = None
         if stored:
             self._buffered_water_temp = stored.get("buffered_water_temp")
             self._last_backwash_date = stored.get("last_backwash_date")
-            log.info("Restored buffered water temp: %s°C, last backwash: %s",
-                     self._buffered_water_temp, self._last_backwash_date)
+            restored_program = stored.get("active_program")
+            log.info("Restored buffered water temp: %s°C, last backwash: %s, active program: %s",
+                     self._buffered_water_temp, self._last_backwash_date, restored_program)
         self._scheduler_task = self.entry.async_create_background_task(
             self.hass, self._scheduler_loop(), "pool_pump_scheduler"
         )
+
+        # Restore automatik across reloads / HA restart. Timed programs are
+        # intentionally NOT restored — their remaining runtime is unknown
+        # and blindly restarting could run the pump when the user didn't
+        # ask for it.
+        if restored_program == MODE_AUTOMATIK:
+            self._active_program = MODE_AUTOMATIK
+            log.info("Re-activating automatik from persisted state")
+
         log.info("Pool Pump coordinator started (test_mode=%s)", self.test_mode)
 
     async def async_shutdown(self) -> None:
@@ -240,6 +251,7 @@ class PoolPumpCoordinator:
         await self._store.async_save({
             "buffered_water_temp": self._buffered_water_temp,
             "last_backwash_date": self._last_backwash_date,
+            "active_program": self._active_program,
         })
 
     # --- Program switching ---
@@ -253,6 +265,7 @@ class PoolPumpCoordinator:
         await self._stop_current_program()
 
         self._active_program = program_name
+        await self._persist_state()
         log.info("Program activated: %s", program_name)
 
         if program_name == MODE_AUTOMATIK:
@@ -279,6 +292,7 @@ class PoolPumpCoordinator:
             return
         await self._stop_current_program()
         self._active_program = None
+        await self._persist_state()
         self._notify()
         log.info("Program deactivated: %s → manual mode", program_name)
 
@@ -309,12 +323,14 @@ class PoolPumpCoordinator:
         # Deactivate the program switch — back to manual
         self._active_program = None
         self._program_task = None
+        await self._persist_state()
         self._notify()
 
     async def async_pump_switch_off(self) -> None:
         """User turned off pump switch → cancel any active program, go manual."""
         await self._stop_current_program()
         self._active_program = None
+        await self._persist_state()
         self._notify()
         log.info("Pump switch off → manual mode")
 
