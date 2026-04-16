@@ -2,7 +2,7 @@
 
 import logging
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -52,22 +52,26 @@ class _Base(SensorEntity):
 
 
 class PoolPumpStatus(_Base):
+    """Aktuelle Drehzahl in %. 0 wenn Pumpe steht."""
+
     _attr_name = "Status"
-    _attr_icon = "mdi:information-outline"
+    _attr_icon = "mdi:speedometer"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_status"
 
     @property
-    def native_value(self) -> str:
+    def native_value(self) -> int:
         if not self._coordinator.running:
-            return "stopped"
-        return f"running ({self._coordinator.target_speed:.0f}%)"
+            return 0
+        return int(self._coordinator.target_speed)
 
 
 class PoolPumpMode(_Base):
-    """Shows active program or manual."""
+    """Aktiver Modus — einheitliche, gut visualisierbare Werte."""
 
     _attr_name = "Mode"
     _attr_icon = "mdi:auto-fix"
@@ -80,12 +84,11 @@ class PoolPumpMode(_Base):
     def native_value(self) -> str:
         prog = self._coordinator.active_program
         if prog is None:
-            return "manual"
+            return "Manuell"
         if prog == MODE_AUTOMATIK:
-            sub = self._coordinator.auto_sub_mode
-            if sub:
-                return f"automatik ({sub})"
-            return "automatik"
+            if self._coordinator.auto_sub_mode == "frost_protection":
+                return "Frostschutz"
+            return "Automatik"
         return prog
 
 
