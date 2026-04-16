@@ -82,6 +82,11 @@ class PoolPumpCoordinator:
         # Automatik sub-mode (normal vs frost — only relevant when automatik is active)
         self._auto_sub_mode: str | None = None  # "normal" or "frost_protection"
 
+        # run_hours is only recalculated while the pump is running. This
+        # prevents a water-temp sample (taken right at block end) from
+        # shifting the block schedule and causing a phantom restart.
+        self._cached_run_hours: float | None = None
+
         # Freshwater
         self._freshwater_switch: str | None = entry.data.get(CONF_FRESHWATER_SWITCH)
         self._freshwater_running = False
@@ -499,10 +504,16 @@ class PoolPumpCoordinator:
 
         in_window = window_start <= now.time() <= window_end
         water_temp = self._buffered_water_temp
-        run_hours = max(1.0, water_temp / self.temp_divisor) if water_temp else 6.0
+        run_hours_fresh = max(1.0, water_temp / self.temp_divisor) if water_temp else 6.0
+
+        if self._running:
+            self._cached_run_hours = run_hours_fresh
+        run_hours = self._cached_run_hours or run_hours_fresh
+
         should_run = in_window and self._should_run_now(now, window_start, window_end, run_hours)
 
         if should_run and not self._running:
+            self._cached_run_hours = run_hours_fresh
             await self.async_ensure_running(self.normal_speed)
         elif not should_run and self._running:
             await self._sample_water_temp_if_eligible()
