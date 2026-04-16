@@ -10,7 +10,7 @@ from .coordinator import PoolPumpCoordinator
 
 log = logging.getLogger(__name__)
 
-PLATFORMS = ["switch", "number", "sensor", "button"]
+PLATFORMS = ["switch", "number", "sensor", "binary_sensor", "button"]
 # select platform removed — mode is now a read-only sensor
 
 

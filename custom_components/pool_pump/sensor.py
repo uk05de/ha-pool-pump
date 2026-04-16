@@ -20,7 +20,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: PoolPumpCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [
-        PoolPumpStatus(coordinator, entry),
+        PoolPumpSpeed(coordinator, entry),
         PoolPumpMode(coordinator, entry),
         TestModeSensor(coordinator, entry),
         BackwashCountdown(coordinator, entry),
@@ -51,17 +51,20 @@ class _Base(SensorEntity):
         self._coordinator.remove_listener(self.async_write_ha_state)
 
 
-class PoolPumpStatus(_Base):
-    """Aktuelle Drehzahl in %. 0 wenn Pumpe steht."""
+class PoolPumpSpeed(_Base):
+    """Aktuelle Drehzahl in %. 0 wenn Pumpe steht.
 
-    _attr_name = "Status"
+    Reine Anzeige-Entity. Zum Ändern der Drehzahl dient `number.pool_pump_speed`.
+    """
+
+    _attr_name = "Speed"
     _attr_icon = "mdi:speedometer"
     _attr_native_unit_of_measurement = "%"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_status"
+        self._attr_unique_id = f"{entry.entry_id}_speed_current"
 
     @property
     def native_value(self) -> int:
