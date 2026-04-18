@@ -2,7 +2,7 @@
 
 import logging
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -52,25 +52,24 @@ class _Base(SensorEntity):
 
 
 class PoolPumpSpeed(_Base):
-    """Aktuelle Drehzahl in %. 0 wenn Pumpe steht.
+    """Aktuelle Drehzahl als Text (`Aus` oder `45 %`).
 
-    Reine Anzeige-Entity. Zum Ändern der Drehzahl dient `number.pool_pump_speed`.
+    Text-State, damit HA im History-Graph Farbbänder statt Linie rendert.
+    Zum Ändern der Drehzahl dient `number.pool_pump_speed`.
     """
 
     _attr_name = "Speed"
     _attr_icon = "mdi:speedometer"
-    _attr_native_unit_of_measurement = "%"
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_speed_current"
 
     @property
-    def native_value(self) -> int:
+    def native_value(self) -> str:
         if not self._coordinator.running:
-            return 0
-        return int(self._coordinator.target_speed)
+            return "Aus"
+        return f"{int(self._coordinator.target_speed)} %"
 
 
 class PoolPumpMode(_Base):
