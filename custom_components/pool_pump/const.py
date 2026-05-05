@@ -3,12 +3,13 @@
 DOMAIN = "pool_pump"
 
 # Config entry keys — hub setup
-CONF_POWER_SWITCH = "power_switch"
-CONF_SPEED_NUMBER = "speed_number"
-CONF_START_SWITCH = "start_switch"
+CONF_POWER_SWITCH = "power_switch"      # only used in normal mode
+CONF_SPEED_NUMBER = "speed_number"      # only used in normal mode
+CONF_START_SWITCH = "start_switch"      # in simple mode this is the only pump switch
 CONF_OUTSIDE_TEMPS = "outside_temps"
 CONF_WATER_TEMP = "water_temp"
 CONF_ROOM_TEMP = "room_temp"
+CONF_SIMPLE_MODE = "simple_mode"        # True → no power switch, no speed control
 
 # Temperature plausibility filter
 TEMP_MIN_PLAUSIBLE = -30.0
@@ -29,7 +30,9 @@ CONF_NORMAL_TEMP_DIVISOR = "normal_temp_divisor"
 
 # Options keys — user-defined programs
 CONF_PROGRAMS = "programs"
-# Each: {name, speed, duration_min}  (duration_min=0 → runs until manually stopped)
+# Each: {name, speed, duration_min, resume_automatik}
+#   duration_min=0      → runs until manually stopped
+#   resume_automatik    → after timed stop, switch to automatik (default: False → manual)
 
 # Options keys — backwash reminder
 CONF_BACKWASH_INTERVAL_DAYS = "backwash_interval_days"

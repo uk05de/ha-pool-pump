@@ -19,6 +19,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: PoolPumpCoordinator = hass.data[DOMAIN][entry.entry_id]
+    if coordinator.simple_mode:
+        return  # no speed control
     async_add_entities([PoolPumpSpeed(coordinator, entry)])
 
 

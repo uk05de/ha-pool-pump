@@ -3,7 +3,9 @@
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from homeassistant.util import dt as dt_util
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -17,6 +19,7 @@ from .const import (
     CONF_OUTSIDE_TEMPS,
     CONF_WATER_TEMP,
     CONF_ROOM_TEMP,
+    CONF_SIMPLE_MODE,
     CONF_TEST_MODE,
     CONF_WINTER_OVERRIDE,
     CONF_WINTER_THRESHOLDS,
@@ -57,9 +60,9 @@ class PoolPumpCoordinator:
         self.hass = hass
         self.entry = entry
 
-        # Shelly entity IDs
-        self._power_switch = entry.data[CONF_POWER_SWITCH]
-        self._speed_number = entry.data[CONF_SPEED_NUMBER]
+        # Shelly entity IDs (power_switch / speed_number absent in simple mode)
+        self._power_switch = entry.data.get(CONF_POWER_SWITCH)
+        self._speed_number = entry.data.get(CONF_SPEED_NUMBER)
         self._start_switch = entry.data[CONF_START_SWITCH]
 
         # Sensor entity IDs
@@ -99,6 +102,10 @@ class PoolPumpCoordinator:
         # Tasks
         self._scheduler_task: asyncio.Task | None = None
         self._program_task: asyncio.Task | None = None
+        # Wall-clock end time of the currently running timed program. Used
+        # by the "Nächster Wechsel" sensor. Frost cycles compute their end
+        # separately via `_frost_cycle_start` + threshold duration.
+        self._program_end_at: datetime | None = None
 
         # Listeners + persistence
         self._listeners: list = []
@@ -110,6 +117,11 @@ class PoolPumpCoordinator:
     @property
     def test_mode(self) -> bool:
         return self.entry.options.get(CONF_TEST_MODE, False)
+
+    @property
+    def simple_mode(self) -> bool:
+        """No power switch, no speed control — just dumb on/off via start_switch."""
+        return self.entry.data.get(CONF_SIMPLE_MODE, False)
 
     @property
     def winter_override(self) -> bool:
@@ -162,6 +174,86 @@ class PoolPumpCoordinator:
     @property
     def buffered_water_temp(self) -> float | None:
         return self._buffered_water_temp
+
+    @property
+    def next_transition_at(self) -> datetime | None:
+        """Wall-clock time of the next pump state change.
+
+        - Timed program running: program end time
+        - Automatik / frost interval: end of current run, or next run start
+        - Automatik / normal: end of current block, or next block start
+        - Otherwise (manual, frost continuous, outside window with no schedule): None
+        """
+        # Timed program (custom user-program) → simple stored end time
+        if self._program_end_at and self._active_program not in (None, MODE_AUTOMATIK):
+            return self._program_end_at
+
+        if self._active_program != MODE_AUTOMATIK:
+            return None
+
+        # Frost protection
+        if self._auto_sub_mode == "frost_protection" and self._current_frost_threshold:
+            t = self._current_frost_threshold
+            if t["interval_min"] == 0 and t["duration_min"] == 0:
+                return None  # continuous — no transition planned
+            now_mono = time.monotonic()
+            now_wall = dt_util.now()
+            if self._running and self._frost_cycle_start is not None:
+                seconds_left = (self._frost_cycle_start + t["duration_min"] * 60) - now_mono
+                return now_wall + timedelta(seconds=max(0, seconds_left))
+            if self._last_frost_run_end is not None:
+                seconds_left = (self._last_frost_run_end + t["interval_min"] * 60) - now_mono
+                return now_wall + timedelta(seconds=max(0, seconds_left))
+            return None
+
+        # Normal automatik mode
+        if self._auto_sub_mode == "normal":
+            return self._normal_next_transition(dt_util.now())
+
+        return None
+
+    def _normal_next_transition(self, now: datetime) -> datetime | None:
+        """Compute next block-boundary transition for normal mode."""
+        window_start = self._parse_time(self.normal_window_start)
+        window_end = self._parse_time(self.normal_window_end)
+        if not window_start or not window_end:
+            return None
+
+        today_start = now.replace(hour=window_start.hour, minute=window_start.minute,
+                                  second=window_start.second, microsecond=0)
+        today_end = now.replace(hour=window_end.hour, minute=window_end.minute,
+                                second=window_end.second, microsecond=0)
+
+        # Outside window — next transition is the next window start
+        if now < today_start:
+            return today_start
+        if now > today_end:
+            return today_start + timedelta(days=1)
+
+        water_temp = self._buffered_water_temp
+        run_hours_fresh = max(1.0, water_temp / self.temp_divisor) if water_temp else 6.0
+        run_hours = self._cached_run_hours or run_hours_fresh
+
+        window_hours = (today_end - today_start).total_seconds() / 3600
+        if run_hours >= window_hours:
+            return today_end  # continuous in window → ends with window
+
+        pause_hours = window_hours - run_hours
+        for num_blocks in [3, 2, 1]:
+            block_hours = run_hours / num_blocks
+            num_gaps = num_blocks + 1
+            gap_hours = pause_hours / num_gaps
+            if gap_hours * 60 < MIN_PAUSE_MINUTES and num_blocks > 1:
+                continue
+            cycle_min = (block_hours + gap_hours) * 60
+            block_min = block_hours * 60
+            gap_min = gap_hours * 60
+            minutes_into_window = (now - today_start).total_seconds() / 60
+            pos_in_cycle = (minutes_into_window - gap_min) % cycle_min
+            if 0 <= pos_in_cycle < block_min:
+                return now + timedelta(minutes=block_min - pos_in_cycle)
+            return now + timedelta(minutes=cycle_min - pos_in_cycle)
+        return today_end
 
     @property
     def backwash_interval_days(self) -> int:
@@ -262,12 +354,18 @@ class PoolPumpCoordinator:
     # --- Program switching ---
 
     async def async_activate_program(self, program_name: str) -> None:
-        """Activate a program. Deactivates any other active program first."""
+        """Activate a program. Smooth transition — does NOT stop the pump.
+
+        Switching between programs (or from manual to a program) just adjusts
+        speed via `ensure_running`. The pump is only stopped when the user
+        explicitly deactivates a program → manual.
+        """
         if self._active_program == program_name:
             return
 
-        # Stop current program
-        await self._stop_current_program()
+        # Cancel any active program/frost timer + reset frost state, but
+        # leave the pump running — the new program will adjust the speed.
+        self._cancel_program_state()
 
         self._active_program = program_name
         await self._persist_state()
@@ -285,11 +383,13 @@ class PoolPumpCoordinator:
                 await self.async_ensure_running(prog["speed"])
                 if prog["duration_min"] > 0:
                     duration_sec = prog["duration_min"] * 60
+                    self._program_end_at = dt_util.now() + timedelta(seconds=duration_sec)
                     self._program_task = self.entry.async_create_background_task(
                         self.hass,
                         self._program_timed_stop(duration_sec, program_name),
                         f"pool_pump_{program_name}",
                     )
+                    self._notify()
 
     async def async_deactivate_program(self, program_name: str) -> None:
         """Deactivate a specific program → manual mode."""
@@ -301,20 +401,22 @@ class PoolPumpCoordinator:
         self._notify()
         log.info("Program deactivated: %s → manual mode", program_name)
 
-    async def _stop_current_program(self) -> None:
-        """Stop whatever is currently running."""
+    def _cancel_program_state(self) -> None:
+        """Cancel program task + reset frost/auto state. Does NOT touch the pump."""
         if self._program_task and not self._program_task.done():
             self._program_task.cancel()
-            self._program_task = None
-
-        if self._running:
-            await self._sample_water_temp_if_eligible()
-            await self.async_ensure_stopped()
-
-        # Reset frost state
+        self._program_task = None
+        self._program_end_at = None
         self._frost_cycle_start = None
         self._current_frost_threshold = None
         self._auto_sub_mode = None
+
+    async def _stop_current_program(self) -> None:
+        """Stop whatever is currently running. Used when going to manual."""
+        self._cancel_program_state()
+        if self._running:
+            await self._sample_water_temp_if_eligible()
+            await self.async_ensure_stopped()
 
     async def _program_timed_stop(self, duration: float, program_name: str) -> None:
         """Auto-stop a timed program after duration."""
@@ -325,11 +427,17 @@ class PoolPumpCoordinator:
         # Check if this was the backwash program → reset counter
         if program_name == self.backwash_program_name:
             await self.async_reset_backwash_counter()
-        # Deactivate the program switch — back to manual
-        self._active_program = None
+        # Decide next state: resume automatik if program is flagged, else manual
+        prog = self._find_program(program_name)
+        resume = bool(prog and prog.get("resume_automatik"))
+        self._active_program = MODE_AUTOMATIK if resume else None
         self._program_task = None
+        self._program_end_at = None
         await self._persist_state()
         self._notify()
+        if resume:
+            log.info("Program '%s' ended → resuming automatik", program_name)
+            await self._evaluate()
 
     async def async_pump_switch_off(self) -> None:
         """User turned off pump switch → cancel any active program, go manual."""
@@ -598,6 +706,16 @@ class PoolPumpCoordinator:
 
     async def async_ensure_running(self, speed):
         async with self._lock:
+            if self.simple_mode:
+                log.info("ensure_running [simple]")
+                await self._call("switch", "turn_on", {"entity_id": self._start_switch})
+                self._target_speed = 100
+                if not self._running:
+                    self._run_start_time = time.monotonic()
+                self._running = True
+                self._notify()
+                return
+
             log.info("ensure_running at %.0f%%", speed)
             power_state = self.hass.states.get(self._power_switch)
             if not power_state or power_state.state != "on":
@@ -613,6 +731,15 @@ class PoolPumpCoordinator:
 
     async def async_ensure_stopped(self):
         async with self._lock:
+            if self.simple_mode:
+                log.info("ensure_stopped [simple]")
+                await self._call("switch", "turn_off", {"entity_id": self._start_switch})
+                self._target_speed = 0
+                self._running = False
+                self._run_start_time = None
+                self._notify()
+                return
+
             log.info("ensure_stopped")
             await self._call("switch", "turn_off", {"entity_id": self._start_switch})
             await asyncio.sleep(STOP_DELAY)
@@ -623,6 +750,8 @@ class PoolPumpCoordinator:
             self._notify()
 
     async def async_set_speed(self, speed):
+        if self.simple_mode:
+            return  # no speed control in simple mode
         async with self._lock:
             await self._set_speed_entity(speed)
             self._target_speed = speed

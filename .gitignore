@@ -5,3 +5,6 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+# Lokale Analyse-Tools, nicht für das Repo
+/tools/

@@ -2,6 +2,13 @@
   "config": {
     "step": {
       "user": {
+        "title": "Pool Pump einrichten — Modus wählen",
+        "description": "Einfacher Modus: Werkstattpumpe oder einfache Pumpe ohne Drehzahlregelung — nur ein Schalter für An/Aus.",
+        "data": {
+          "simple_mode": "Einfacher Pumpenmodus (kein Drehzahl-Regler, ein Schalter)"
+        }
+      },
+      "user_normal": {
         "title": "Pool Pump einrichten",
         "description": "Wähle die Shellys und Sensoren aus.",
         "data": {
@@ -14,13 +21,42 @@
           "freshwater_switch": "Frischwasser-Ventil (optional)"
         }
       },
+      "user_simple": {
+        "title": "Pool Pump einrichten (einfacher Modus)",
+        "description": "Nur ein Schalter wird abgefragt — die Programm-Logik (Laufzeit, Start/Stopp) greift trotzdem.",
+        "data": {
+          "start_switch": "Pumpenschalter",
+          "outside_temps": "Außentemperatur-Sensoren",
+          "water_temp": "Wassertemperatur (Dosieranlage)",
+          "room_temp": "Technikhaus-Temperatur",
+          "freshwater_switch": "Frischwasser-Ventil (optional)"
+        }
+      },
       "reconfigure": {
+        "title": "Pool Pump neu konfigurieren — Modus",
+        "description": "Im einfachen Modus wird nur ein Pumpenschalter benötigt — keine Drehzahlregelung.",
+        "data": {
+          "simple_mode": "Einfacher Pumpenmodus"
+        }
+      },
+      "reconfigure_normal": {
         "title": "Pool Pump neu konfigurieren",
         "description": "Hardware-Entities und Sensoren anpassen — Programme und Einstellungen bleiben erhalten.",
         "data": {
           "power_switch": "Strom-Schalter (Shelly 1 PM)",
           "speed_number": "Drehzahl-Regler (Shelly Dimmer 0-10V)",
           "start_switch": "Start-Signal (Shelly 1)",
+          "outside_temps": "Außentemperatur-Sensoren",
+          "water_temp": "Wassertemperatur (Dosieranlage)",
+          "room_temp": "Technikhaus-Temperatur",
+          "freshwater_switch": "Frischwasser-Ventil (optional)"
+        }
+      },
+      "reconfigure_simple": {
+        "title": "Pool Pump neu konfigurieren (einfacher Modus)",
+        "description": "Nur ein Pumpenschalter — keine Drehzahlregelung. Programme und Einstellungen bleiben erhalten.",
+        "data": {
+          "start_switch": "Pumpenschalter",
           "outside_temps": "Außentemperatur-Sensoren",
           "water_temp": "Wassertemperatur (Dosieranlage)",
           "room_temp": "Technikhaus-Temperatur",
@@ -54,7 +90,8 @@
         "data": {
           "name": "Programmname",
           "speed": "Drehzahl",
-          "duration_min": "Dauer (0 = manuell stoppen)"
+          "duration_min": "Dauer (0 = manuell stoppen)",
+          "resume_automatik": "Nach Ablauf in Automatik wechseln"
         }
       },
       "edit_program": {
@@ -67,7 +104,8 @@
         "title": "Programm bearbeiten",
         "data": {
           "speed": "Drehzahl",
-          "duration_min": "Dauer (0 = manuell stoppen)"
+          "duration_min": "Dauer (0 = manuell stoppen)",
+          "resume_automatik": "Nach Ablauf in Automatik wechseln"
         }
       },
       "remove_program": {

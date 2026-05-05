@@ -14,6 +14,7 @@ from .const import (
     CONF_OUTSIDE_TEMPS,
     CONF_WATER_TEMP,
     CONF_ROOM_TEMP,
+    CONF_SIMPLE_MODE,
     CONF_TEST_MODE,
     CONF_WINTER_THRESHOLDS,
     CONF_NORMAL_WINDOW_START,
@@ -31,12 +32,7 @@ from .const import (
 )
 
 
-def _build_setup_schema(defaults: dict | None = None) -> vol.Schema:
-    """Shared schema for initial setup and reconfigure.
-
-    Existing values from `defaults` are shown as suggested_value so the user
-    can edit them instead of re-entering everything.
-    """
+def _make_helpers(defaults: dict | None):
     d = defaults or {}
 
     def _req(key):
@@ -51,6 +47,12 @@ def _build_setup_schema(defaults: dict | None = None) -> vol.Schema:
             return vol.Optional(key, default=fallback)
         return vol.Optional(key)
 
+    return _req, _opt
+
+
+def _build_setup_schema_normal(defaults: dict | None = None) -> vol.Schema:
+    """Schema for normal (drehzahlgeregelt) mode — three switch/dimmer entities."""
+    _req, _opt = _make_helpers(defaults)
     return vol.Schema({
         _req(CONF_POWER_SWITCH): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="switch"),
@@ -78,34 +80,116 @@ def _build_setup_schema(defaults: dict | None = None) -> vol.Schema:
     })
 
 
+def _build_setup_schema_simple(defaults: dict | None = None) -> vol.Schema:
+    """Schema for simple mode — one switch only, no speed/power."""
+    _req, _opt = _make_helpers(defaults)
+    return vol.Schema({
+        _req(CONF_START_SWITCH): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch"),
+        ),
+        _opt(CONF_OUTSIDE_TEMPS, fallback=[]): selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain="sensor", device_class="temperature", multiple=True,
+            ),
+        ),
+        _opt(CONF_WATER_TEMP): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
+        ),
+        _opt(CONF_ROOM_TEMP): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="temperature"),
+        ),
+        _opt(CONF_FRESHWATER_SWITCH): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="switch"),
+        ),
+    })
+
+
 class PoolPumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Pool Pump."""
 
     VERSION = 1
 
+    def __init__(self):
+        self._simple_mode: bool = False
+
+    # --- Initial setup (two-step: pick mode → enter entities) ---
+
     async def async_step_user(self, user_input=None):
+        if user_input is not None:
+            self._simple_mode = bool(user_input.get(CONF_SIMPLE_MODE, False))
+            if self._simple_mode:
+                return await self.async_step_user_simple()
+            return await self.async_step_user_normal()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema({
+                vol.Required(CONF_SIMPLE_MODE, default=False): bool,
+            }),
+        )
+
+    async def async_step_user_normal(self, user_input=None):
         if user_input is not None:
             return self.async_create_entry(
                 title="Pool Pump",
-                data=user_input,
+                data={**user_input, CONF_SIMPLE_MODE: False},
                 options={
                     CONF_WINTER_THRESHOLDS: DEFAULT_THRESHOLDS,
                     CONF_PROGRAMS: DEFAULT_PROGRAMS,
                 },
             )
+        return self.async_show_form(step_id="user_normal", data_schema=_build_setup_schema_normal())
 
-        return self.async_show_form(step_id="user", data_schema=_build_setup_schema())
+    async def async_step_user_simple(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(
+                title="Pool Pump",
+                data={**user_input, CONF_SIMPLE_MODE: True},
+                options={
+                    CONF_WINTER_THRESHOLDS: DEFAULT_THRESHOLDS,
+                    CONF_PROGRAMS: DEFAULT_PROGRAMS,
+                },
+            )
+        return self.async_show_form(step_id="user_simple", data_schema=_build_setup_schema_simple())
+
+    # --- Reconfigure (two-step: pick mode → adjust entities) ---
 
     async def async_step_reconfigure(self, user_input=None):
-        """Allow the user to re-pick hardware entities without deleting the entry."""
         entry = self._get_reconfigure_entry()
-
         if user_input is not None:
-            return self.async_update_reload_and_abort(entry, data=user_input)
+            self._simple_mode = bool(user_input.get(CONF_SIMPLE_MODE, False))
+            if self._simple_mode:
+                return await self.async_step_reconfigure_simple()
+            return await self.async_step_reconfigure_normal()
 
+        current_simple = bool(entry.data.get(CONF_SIMPLE_MODE, False))
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_build_setup_schema(dict(entry.data)),
+            data_schema=vol.Schema({
+                vol.Required(CONF_SIMPLE_MODE, default=current_simple): bool,
+            }),
+        )
+
+    async def async_step_reconfigure_normal(self, user_input=None):
+        entry = self._get_reconfigure_entry()
+        if user_input is not None:
+            return self.async_update_reload_and_abort(
+                entry, data={**user_input, CONF_SIMPLE_MODE: False},
+            )
+        return self.async_show_form(
+            step_id="reconfigure_normal",
+            data_schema=_build_setup_schema_normal(dict(entry.data)),
+        )
+
+    async def async_step_reconfigure_simple(self, user_input=None):
+        entry = self._get_reconfigure_entry()
+        if user_input is not None:
+            return self.async_update_reload_and_abort(
+                entry, data={**user_input, CONF_SIMPLE_MODE: True},
+            )
+        return self.async_show_form(
+            step_id="reconfigure_simple",
+            data_schema=_build_setup_schema_simple(dict(entry.data)),
         )
 
     @staticmethod
@@ -174,10 +258,11 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         if not programs:
             desc = "Keine Programme konfiguriert."
         else:
-            lines = ["Programm | Drehzahl | Dauer", "--- | --- | ---"]
+            lines = ["Programm | Drehzahl | Dauer | Danach", "--- | --- | --- | ---"]
             for p in programs:
                 dur = f"{p['duration_min']} min" if p["duration_min"] > 0 else "manuell"
-                lines.append(f"{p['name']} | {p['speed']}% | {dur}")
+                after = "Automatik" if p.get("resume_automatik") else "Manuell"
+                lines.append(f"{p['name']} | {p['speed']}% | {dur} | {after}")
             desc = "\n".join(lines)
 
         return self.async_show_form(
@@ -193,6 +278,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 "name": user_input["name"],
                 "speed": int(user_input["speed"]),
                 "duration_min": int(user_input["duration_min"]),
+                "resume_automatik": bool(user_input.get("resume_automatik", False)),
             })
             options = dict(self._entry.options)
             options[CONF_PROGRAMS] = programs
@@ -204,8 +290,9 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required("duration_min", default=5): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=120, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+                selector.NumberSelectorConfig(min=0, max=1440, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
             ),
+            vol.Required("resume_automatik", default=False): bool,
         })
 
         return self.async_show_form(step_id="add_program", data_schema=schema)
@@ -240,6 +327,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 if p["name"] == self._edit_program_name:
                     p["speed"] = int(user_input["speed"])
                     p["duration_min"] = int(user_input["duration_min"])
+                    p["resume_automatik"] = bool(user_input.get("resume_automatik", False))
                     break
             options = dict(self._entry.options)
             options[CONF_PROGRAMS] = programs
@@ -250,8 +338,9 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 selector.NumberSelectorConfig(min=5, max=100, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required("duration_min", default=prog["duration_min"]): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=120, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+                selector.NumberSelectorConfig(min=0, max=1440, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
             ),
+            vol.Required("resume_automatik", default=bool(prog.get("resume_automatik", False))): bool,
         })
 
         return self.async_show_form(step_id="edit_program_values", data_schema=schema)

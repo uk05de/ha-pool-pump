@@ -20,12 +20,14 @@ async def async_setup_entry(
 ) -> None:
     coordinator: PoolPumpCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [
-        PoolPumpSpeed(coordinator, entry),
         PoolPumpMode(coordinator, entry),
+        PoolPumpNextTransition(coordinator, entry),
         TestModeSensor(coordinator, entry),
         BackwashCountdown(coordinator, entry),
         BufferedWaterTemp(coordinator, entry),
     ]
+    if not coordinator.simple_mode:
+        entities.append(PoolPumpSpeed(coordinator, entry))
 
     if coordinator._outside_temps:
         entities.append(OutsideTemperature(coordinator, entry))
@@ -92,6 +94,27 @@ class PoolPumpMode(_Base):
                 return "Frostschutz"
             return "Automatik"
         return prog
+
+
+class PoolPumpNextTransition(_Base):
+    """Wall-clock time of the next pump state change.
+
+    HA renders TIMESTAMP entities relative ("in 12 min") and the dashboard
+    auto-updates the relative display every second, so this also doubles
+    as a live countdown.
+    """
+
+    _attr_name = "Nächster Wechsel"
+    _attr_icon = "mdi:timer-sand"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_next_transition"
+
+    @property
+    def native_value(self):
+        return self._coordinator.next_transition_at
 
 
 class TestModeSensor(_Base):
