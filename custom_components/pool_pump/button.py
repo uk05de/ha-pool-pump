@@ -55,11 +55,11 @@ class NotausButton(_BaseButton):
     """
 
     _attr_name = "Notaus"
-    _attr_icon = "mdi:stop-circle-outline"sc
+    _attr_icon = "mdi:stop-circle-outline"
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}irgendwo   "
+        self._attr_unique_id = f"{entry.entry_id}_notaus"
 
     async def async_press(self) -> None:
         await self._coordinator.async_emergency_stop()
