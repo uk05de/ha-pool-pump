@@ -86,6 +86,8 @@ class PoolPumpMode(_Base):
 
     @property
     def native_value(self) -> str:
+        if self._coordinator.in_nachlauf:
+            return "Nachlauf"
         prog = self._coordinator.active_program
         if prog is None:
             return "Manuell"

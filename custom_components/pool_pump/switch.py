@@ -29,6 +29,9 @@ async def async_setup_entry(
     if coordinator.freshwater_available:
         entities.append(FreshwaterSwitch(coordinator, entry))
 
+    if coordinator.heat_pump_configured:
+        entities.append(HeatPumpEnabledSwitch(coordinator, entry))
+
     # Create a switch for each user-defined program
     for prog in coordinator.programs:
         entities.append(TimedProgramSwitch(coordinator, entry, prog))
@@ -142,6 +145,32 @@ class FreshwaterSwitch(_BaseSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._coordinator.async_stop_freshwater()
+
+
+class HeatPumpEnabledSwitch(_BaseSwitch):
+    """User-controlled gate: should the pool pump co-switch the heat pump?
+
+    OFF → pool pump never touches the HP, regardless of program.
+    ON → HP follows pool pump cycles when the active program is in the
+    heat_pump_programs allowlist.
+    """
+
+    _attr_name = "Wärmepumpe mit-schalten"
+    _attr_icon = "mdi:heat-pump"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_heat_pump_enabled"
+
+    @property
+    def is_on(self) -> bool:
+        return self._coordinator.heat_pump_enabled
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._coordinator.async_set_heat_pump_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._coordinator.async_set_heat_pump_enabled(False)
 
 
 class WinterOverrideSwitch(_BaseSwitch):

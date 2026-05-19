@@ -34,6 +34,10 @@ from .const import (
     CONF_FRESHWATER_SWITCH,
     CONF_FRESHWATER_DURATION,
     DEFAULT_FRESHWATER_DURATION,
+    CONF_HEAT_PUMP_POWER_ENTITY,
+    CONF_HEAT_PUMP_PROGRAMS,
+    CONF_HEAT_PUMP_SHUTDOWN_DELAY,
+    DEFAULT_HEAT_PUMP_SHUTDOWN_DELAY,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
     POWER_ON_DELAY,
@@ -99,13 +103,21 @@ class PoolPumpCoordinator:
         self._last_backwash_date: str | None = None
         self._last_notification_date: str | None = None
 
+        # Heat pump — user-controlled gate ("mit-schalten"). Lives in the
+        # coordinator store rather than entry.options to avoid triggering
+        # a full reload (which would kill any running program) on toggle.
+        self._heat_pump_enabled: bool = False
+
         # Tasks
         self._scheduler_task: asyncio.Task | None = None
         self._program_task: asyncio.Task | None = None
+        self._nachlauf_task: asyncio.Task | None = None
         # Wall-clock end time of the currently running timed program. Used
         # by the "Nächster Wechsel" sensor. Frost cycles compute their end
         # separately via `_frost_cycle_start` + threshold duration.
         self._program_end_at: datetime | None = None
+        # Wall-clock end time of the heat-pump shutdown nachlauf, if active.
+        self._nachlauf_end_at: datetime | None = None
 
         # Listeners + persistence
         self._listeners: list = []
@@ -151,6 +163,39 @@ class PoolPumpCoordinator:
     def temp_divisor(self) -> float:
         return self.entry.options.get(CONF_NORMAL_TEMP_DIVISOR, 2.0)
 
+    # --- Heat pump accessors ---
+
+    @property
+    def heat_pump_power_entity(self) -> str | None:
+        return self.entry.options.get(CONF_HEAT_PUMP_POWER_ENTITY) or None
+
+    @property
+    def heat_pump_programs(self) -> list[str]:
+        return self.entry.options.get(CONF_HEAT_PUMP_PROGRAMS, []) or []
+
+    @property
+    def heat_pump_shutdown_delay(self) -> int:
+        return self.entry.options.get(
+            CONF_HEAT_PUMP_SHUTDOWN_DELAY, DEFAULT_HEAT_PUMP_SHUTDOWN_DELAY
+        )
+
+    @property
+    def heat_pump_configured(self) -> bool:
+        return bool(self.heat_pump_power_entity)
+
+    @property
+    def heat_pump_enabled(self) -> bool:
+        """User wants the pool pump to co-control the heat pump."""
+        return self._heat_pump_enabled
+
+    @property
+    def in_nachlauf(self) -> bool:
+        return self._nachlauf_task is not None and not self._nachlauf_task.done()
+
+    @property
+    def nachlauf_end_at(self) -> datetime | None:
+        return self._nachlauf_end_at
+
     # --- State accessors ---
 
     @property
@@ -179,11 +224,16 @@ class PoolPumpCoordinator:
     def next_transition_at(self) -> datetime | None:
         """Wall-clock time of the next pump state change.
 
+        - Nachlauf running: nachlauf end time (highest priority)
         - Timed program running: program end time
         - Automatik / frost interval: end of current run, or next run start
         - Automatik / normal: end of current block, or next block start
         - Otherwise (manual, frost continuous, outside window with no schedule): None
         """
+        # Nachlauf — about to actually stop the pool pump
+        if self._nachlauf_end_at:
+            return self._nachlauf_end_at
+
         # Timed program (custom user-program) → simple stored end time
         if self._program_end_at and self._active_program not in (None, MODE_AUTOMATIK):
             return self._program_end_at
@@ -318,8 +368,13 @@ class PoolPumpCoordinator:
             self._buffered_water_temp = stored.get("buffered_water_temp")
             self._last_backwash_date = stored.get("last_backwash_date")
             restored_program = stored.get("active_program")
-            log.info("Restored buffered water temp: %s°C, last backwash: %s, active program: %s",
-                     self._buffered_water_temp, self._last_backwash_date, restored_program)
+            self._heat_pump_enabled = bool(stored.get("heat_pump_enabled", False))
+            log.info(
+                "Restored buffered water temp: %s°C, last backwash: %s, "
+                "active program: %s, heat pump enabled: %s",
+                self._buffered_water_temp, self._last_backwash_date,
+                restored_program, self._heat_pump_enabled,
+            )
         self._scheduler_task = self.entry.async_create_background_task(
             self.hass, self._scheduler_loop(), "pool_pump_scheduler"
         )
@@ -339,6 +394,8 @@ class PoolPumpCoordinator:
             self._scheduler_task.cancel()
         if self._program_task and not self._program_task.done():
             self._program_task.cancel()
+        if self._nachlauf_task and not self._nachlauf_task.done():
+            self._nachlauf_task.cancel()
         if self._freshwater_task and not self._freshwater_task.done():
             self._freshwater_task.cancel()
         await self._persist_state()
@@ -349,6 +406,7 @@ class PoolPumpCoordinator:
             "buffered_water_temp": self._buffered_water_temp,
             "last_backwash_date": self._last_backwash_date,
             "active_program": self._active_program,
+            "heat_pump_enabled": self._heat_pump_enabled,
         })
 
     # --- Program switching ---
@@ -704,19 +762,14 @@ class PoolPumpCoordinator:
             await self._call("number", "set_value",
                              {"entity_id": self._speed_number, "value": speed})
 
-    async def async_ensure_running(self, speed):
-        async with self._lock:
-            if self.simple_mode:
-                log.info("ensure_running [simple]")
-                await self._call("switch", "turn_on", {"entity_id": self._start_switch})
-                self._target_speed = 100
-                if not self._running:
-                    self._run_start_time = time.monotonic()
-                self._running = True
-                self._notify()
-                return
-
-            log.info("ensure_running at %.0f%%", speed)
+    async def _start_pool_pump_hardware(self, speed):
+        """Shelly start sequence. Caller must hold `_lock`."""
+        if self.simple_mode:
+            log.info("pool pump start [simple]")
+            await self._call("switch", "turn_on", {"entity_id": self._start_switch})
+            self._target_speed = 100
+        else:
+            log.info("pool pump start at %.0f%%", speed)
             power_state = self.hass.states.get(self._power_switch)
             if not power_state or power_state.state != "on":
                 await self._call("switch", "turn_on", {"entity_id": self._power_switch})
@@ -724,30 +777,154 @@ class PoolPumpCoordinator:
             await self._set_speed_entity(speed)
             await self._call("switch", "turn_on", {"entity_id": self._start_switch})
             self._target_speed = speed
-            if not self._running:
-                self._run_start_time = time.monotonic()
-            self._running = True
-            self._notify()
+        if not self._running:
+            self._run_start_time = time.monotonic()
+        self._running = True
+        self._notify()
 
-    async def async_ensure_stopped(self):
-        async with self._lock:
-            if self.simple_mode:
-                log.info("ensure_stopped [simple]")
-                await self._call("switch", "turn_off", {"entity_id": self._start_switch})
-                self._target_speed = 0
-                self._running = False
-                self._run_start_time = None
-                self._notify()
-                return
-
-            log.info("ensure_stopped")
+    async def _stop_pool_pump_hardware(self):
+        """Shelly stop sequence. Caller must hold `_lock`."""
+        if self.simple_mode:
+            log.info("pool pump stop [simple]")
+            await self._call("switch", "turn_off", {"entity_id": self._start_switch})
+        else:
+            log.info("pool pump stop")
             await self._call("switch", "turn_off", {"entity_id": self._start_switch})
             await asyncio.sleep(STOP_DELAY)
             await self._set_speed_entity(0)
-            self._target_speed = 0
-            self._running = False
-            self._run_start_time = None
+        self._target_speed = 0
+        self._running = False
+        self._run_start_time = None
+        self._notify()
+
+    # --- Heat pump driver ---
+
+    def _heat_pump_is_on(self) -> bool:
+        if not self.heat_pump_power_entity:
+            return False
+        state = self.hass.states.get(self.heat_pump_power_entity)
+        return bool(state and state.state == "on")
+
+    def _heat_pump_co_controlled(self) -> bool:
+        """True when the active program asks us to switch the HP.
+
+        Requires: HP configured + user enabled + program in allowlist.
+        """
+        return (
+            self.heat_pump_configured
+            and self._heat_pump_enabled
+            and self._active_program in self.heat_pump_programs
+        )
+
+    async def _heat_pump_turn_on(self) -> None:
+        if not self.heat_pump_power_entity:
+            return
+        log.info("heat pump: ON (program=%s)", self._active_program)
+        await self._call("switch", "turn_on",
+                         {"entity_id": self.heat_pump_power_entity})
+
+    async def _heat_pump_turn_off(self) -> None:
+        if not self.heat_pump_power_entity:
+            return
+        log.info("heat pump: OFF")
+        await self._call("switch", "turn_off",
+                         {"entity_id": self.heat_pump_power_entity})
+
+    # --- Pool pump high-level run/stop (with HP gating) ---
+
+    async def async_ensure_running(self, speed):
+        async with self._lock:
+            # If a nachlauf was scheduled, cancel it — we're starting again
+            if self.in_nachlauf:
+                self._nachlauf_task.cancel()
+                self._nachlauf_task = None
+                self._nachlauf_end_at = None
+
+            # Start order: pool pump first, then HP
+            await self._start_pool_pump_hardware(speed)
+
+            # HA's view of the HP state can be stale right after another
+            # turn_off (mid-transition), so always send the intent — the
+            # MQTT/Modbus path is idempotent.
+            if self._heat_pump_co_controlled():
+                await self._heat_pump_turn_on()
+            elif self.heat_pump_configured and self._heat_pump_is_on():
+                # Program switched to non-allowlist while HP was on — kill it.
+                # No nachlauf needed because the pool pump keeps running.
+                await self._heat_pump_turn_off()
+
+    async def async_ensure_stopped(self, *, immediate: bool = False):
+        """Stop the pool pump.
+
+        - immediate=False (default): if the HP is co-controlled and on, send
+          HP off, schedule the pool pump stop after `heat_pump_shutdown_delay`.
+          Returns once nachlauf is scheduled — actual stop happens async.
+        - immediate=True: skip nachlauf, cancel any in-flight nachlauf, hard
+          stop. Used by Notaus.
+        """
+        async with self._lock:
+            # Notaus during a running nachlauf: cancel and proceed to hard stop
+            if self.in_nachlauf and immediate:
+                self._nachlauf_task.cancel()
+                self._nachlauf_task = None
+                self._nachlauf_end_at = None
+                self._notify()
+            elif self.in_nachlauf:
+                # Already stopping gracefully — idempotent
+                return
+
+            if not self._running:
+                # Even if pool is already off, an immediate stop should kill
+                # the HP (e.g. Notaus while pump was already stopped).
+                if (
+                    immediate
+                    and self.heat_pump_configured
+                    and self._heat_pump_is_on()
+                ):
+                    await self._heat_pump_turn_off()
+                return
+
+            hp_is_on = self.heat_pump_configured and self._heat_pump_is_on()
+            hp_co_controlled = self._heat_pump_co_controlled()
+
+            # Stop order: HP off first. Immediate path also forces HP off if
+            # it's on for any reason (Notaus must kill heating regardless).
+            if hp_is_on and (hp_co_controlled or immediate):
+                await self._heat_pump_turn_off()
+
+            # Nachlauf only when we actually took the HP down gracefully
+            if (
+                hp_is_on
+                and hp_co_controlled
+                and not immediate
+                and self.heat_pump_shutdown_delay > 0
+            ):
+                delay = self.heat_pump_shutdown_delay
+                self._nachlauf_end_at = dt_util.now() + timedelta(seconds=delay)
+                self._notify()
+                self._nachlauf_task = self.entry.async_create_background_task(
+                    self.hass, self._nachlauf_then_stop(delay),
+                    "pool_pump_nachlauf",
+                )
+                return
+
+            # Immediate / no HP — stop the pool pump now (still in the lock)
+            await self._sample_water_temp_if_eligible()
+            await self._stop_pool_pump_hardware()
+
+    async def _nachlauf_then_stop(self, delay: float) -> None:
+        """Wait nachlauf duration, then actually stop the pool pump."""
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return  # Notaus / restart cancelled us — don't stop the pump
+        async with self._lock:
+            self._nachlauf_end_at = None
+            self._nachlauf_task = None
             self._notify()
+            if self._running:
+                await self._sample_water_temp_if_eligible()
+                await self._stop_pool_pump_hardware()
 
     async def async_set_speed(self, speed):
         if self.simple_mode:
@@ -756,6 +933,52 @@ class PoolPumpCoordinator:
             await self._set_speed_entity(speed)
             self._target_speed = speed
             self._notify()
+
+    # --- Heat pump user toggle (mit-schalten switch) ---
+
+    async def async_set_heat_pump_enabled(self, enabled: bool) -> None:
+        """Toggle the user-side WP-mit-schalten switch."""
+        if enabled == self._heat_pump_enabled:
+            return
+        self._heat_pump_enabled = enabled
+        await self._persist_state()
+        self._notify()
+
+        if not self.heat_pump_configured:
+            return
+        # While nachlauf is running, don't touch the HP — let the shutdown
+        # complete; the new preference takes effect at the next program start.
+        if self.in_nachlauf or not self._running:
+            return
+
+        if enabled and self._active_program in self.heat_pump_programs:
+            if not self._heat_pump_is_on():
+                async with self._lock:
+                    await self._heat_pump_turn_on()
+        elif not enabled:
+            # User opted out mid-program: turn off WP now (pool still flows → no E3)
+            if self._heat_pump_is_on():
+                async with self._lock:
+                    await self._heat_pump_turn_off()
+
+    # --- Notaus (emergency stop) ---
+
+    async def async_emergency_stop(self) -> None:
+        """Hard stop: cancel program/nachlauf, force pool + HP off in parallel.
+
+        Accepts an E3 error on the HP — this is for emergencies, not for
+        graceful operation. Use the regular OFF switches for nachlauf.
+        """
+        log.warning("EMERGENCY STOP triggered")
+        self._cancel_program_state()
+        if self._nachlauf_task and not self._nachlauf_task.done():
+            self._nachlauf_task.cancel()
+        self._nachlauf_task = None
+        self._nachlauf_end_at = None
+        self._active_program = None
+        await self._persist_state()
+        self._notify()
+        await self.async_ensure_stopped(immediate=True)
 
     # --- Freshwater control ---
 

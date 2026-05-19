@@ -50,6 +50,15 @@ CONF_WINTER_THRESHOLDS = "winter_thresholds"
 # Each: {below_temp, interval_min, duration_min, speed}
 # interval_min=0 + duration_min=0 → continuous
 
+# Options keys — heat pump (pool pump gates the heat pump's power switch).
+# Whether the user wants heating is a separate switch entity stored in the
+# coordinator state, so toggling it does not reload the entry (which would
+# kill any running program).
+CONF_HEAT_PUMP_POWER_ENTITY = "heat_pump_power_entity"
+CONF_HEAT_PUMP_PROGRAMS = "heat_pump_programs"        # list of program names allowed to heat
+CONF_HEAT_PUMP_SHUTDOWN_DELAY = "heat_pump_shutdown_delay"
+DEFAULT_HEAT_PUMP_SHUTDOWN_DELAY = 120  # seconds — HP run-out before pool pump stops
+
 # Options keys — test/debug
 CONF_TEST_MODE = "test_mode"
 

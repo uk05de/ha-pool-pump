@@ -149,6 +149,15 @@
           "threshold": "Schwelle"
         }
       },
+      "heat_pump_settings": {
+        "title": "Wärmepumpen-Steuerung",
+        "description": "Steuert die Wärmepumpe über deren Power-Schalter. Der eigentliche Mit-Schalt-Wunsch wird über den Switch 'Wärmepumpe mit-schalten' gesetzt.",
+        "data": {
+          "heat_pump_power_entity": "Power-Schalter der Wärmepumpe",
+          "heat_pump_programs": "Programme, in denen die WP mit-geschaltet wird",
+          "heat_pump_shutdown_delay": "Nachlaufzeit (s) nach WP-Aus, bevor die Pool-Pumpe stoppt"
+        }
+      },
       "test": {
         "title": "Testmodus",
         "description": "Im Testmodus werden keine Befehle an die Shellys gesendet.",

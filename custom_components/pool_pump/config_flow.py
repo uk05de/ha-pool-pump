@@ -27,8 +27,13 @@ from .const import (
     CONF_FRESHWATER_SWITCH,
     CONF_FRESHWATER_DURATION,
     DEFAULT_FRESHWATER_DURATION,
+    CONF_HEAT_PUMP_POWER_ENTITY,
+    CONF_HEAT_PUMP_PROGRAMS,
+    CONF_HEAT_PUMP_SHUTDOWN_DELAY,
+    DEFAULT_HEAT_PUMP_SHUTDOWN_DELAY,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
+    MODE_AUTOMATIK,
 )
 
 
@@ -217,6 +222,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 "add_threshold": "Frostschutz-Schwelle hinzufügen",
                 "edit_threshold": "Frostschutz-Schwelle bearbeiten",
                 "remove_threshold": "Frostschutz-Schwelle entfernen",
+                "heat_pump_settings": "Wärmepumpen-Steuerung",
                 "test": "Testmodus",
             },
         )
@@ -493,6 +499,73 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="remove_threshold",
             data_schema=vol.Schema({vol.Required("threshold"): vol.In(labels)}),
+        )
+
+    # --- Heat pump settings ---
+
+    async def async_step_heat_pump_settings(self, user_input=None):
+        if user_input is not None:
+            options = dict(self._entry.options)
+            # Clear out the power entity if user submitted an empty string
+            power = user_input.get(CONF_HEAT_PUMP_POWER_ENTITY) or None
+            options[CONF_HEAT_PUMP_POWER_ENTITY] = power
+            options[CONF_HEAT_PUMP_PROGRAMS] = user_input.get(
+                CONF_HEAT_PUMP_PROGRAMS, []
+            )
+            options[CONF_HEAT_PUMP_SHUTDOWN_DELAY] = int(
+                user_input[CONF_HEAT_PUMP_SHUTDOWN_DELAY]
+            )
+            return self.async_create_entry(title="", data=options)
+
+        opts = self._entry.options
+        programs = opts.get(CONF_PROGRAMS, DEFAULT_PROGRAMS)
+        program_names = [MODE_AUTOMATIK] + [p["name"] for p in programs]
+
+        fields: dict = {}
+        power = opts.get(CONF_HEAT_PUMP_POWER_ENTITY)
+        if power:
+            fields[vol.Optional(
+                CONF_HEAT_PUMP_POWER_ENTITY,
+                description={"suggested_value": power},
+            )] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="switch"),
+            )
+        else:
+            fields[vol.Optional(CONF_HEAT_PUMP_POWER_ENTITY)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="switch"),
+                )
+            )
+
+        current_programs = opts.get(CONF_HEAT_PUMP_PROGRAMS, [])
+        fields[vol.Optional(
+            CONF_HEAT_PUMP_PROGRAMS,
+            default=current_programs,
+        )] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    selector.SelectOptionDict(value=n, label=n)
+                    for n in program_names
+                ],
+                multiple=True,
+                mode=selector.SelectSelectorMode.LIST,
+            ),
+        )
+
+        fields[vol.Required(
+            CONF_HEAT_PUMP_SHUTDOWN_DELAY,
+            default=opts.get(CONF_HEAT_PUMP_SHUTDOWN_DELAY,
+                             DEFAULT_HEAT_PUMP_SHUTDOWN_DELAY),
+        )] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=600, step=5, unit_of_measurement="s",
+                mode=selector.NumberSelectorMode.BOX,
+            ),
+        )
+
+        return self.async_show_form(
+            step_id="heat_pump_settings",
+            data_schema=vol.Schema(fields),
         )
 
     # --- Test mode ---
