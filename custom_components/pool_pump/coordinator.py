@@ -471,10 +471,17 @@ class PoolPumpCoordinator:
         self._auto_sub_mode = None
 
     async def _stop_current_program(self) -> None:
-        """Stop whatever is currently running. Used when going to manual."""
+        """Stop whatever is currently running. Used when going to manual.
+
+        Sampling water temp is the stop sequence's responsibility — it
+        happens inside `ensure_stopped` (immediate path) or `_nachlauf_then_stop`
+        (graceful path), right before the actual pool stop. Sampling here
+        too would update `_buffered_water_temp` while `_running` is still
+        True during nachlauf, shifting `_cached_run_hours` and triggering
+        a phantom restart after nachlauf ends.
+        """
         self._cancel_program_state()
         if self._running:
-            await self._sample_water_temp_if_eligible()
             await self.async_ensure_stopped()
 
     async def _program_timed_stop(self, duration: float, program_name: str) -> None:
@@ -486,7 +493,6 @@ class PoolPumpCoordinator:
         """
         await asyncio.sleep(duration)
         log.info("Program '%s' finished after %.0fs", program_name, duration)
-        await self._sample_water_temp_if_eligible()
         await self.async_ensure_stopped()
         if program_name == self.backwash_program_name:
             await self.async_reset_backwash_counter()
@@ -572,7 +578,6 @@ class PoolPumpCoordinator:
 
         if frost_needed:
             if self._running and self._auto_sub_mode == "normal":
-                await self._sample_water_temp_if_eligible()
                 await self.async_ensure_stopped()
             self._auto_sub_mode = "frost_protection"
             self._notify()
@@ -659,7 +664,6 @@ class PoolPumpCoordinator:
 
     async def _frost_timed_stop(self, duration: float) -> None:
         await asyncio.sleep(duration)
-        await self._sample_water_temp_if_eligible()
         await self.async_ensure_stopped()
         self._last_frost_run_end = time.monotonic()
         self._frost_cycle_start = None
@@ -680,7 +684,12 @@ class PoolPumpCoordinator:
         water_temp = self._buffered_water_temp
         run_hours_fresh = max(1.0, water_temp / self.temp_divisor) if water_temp else 6.0
 
-        if self._running:
+        # Freeze the schedule while the pump is stopped OR in nachlauf.
+        # A water-temp sample taken right before stop (see _nachlauf_then_stop)
+        # would otherwise shift run_hours during the 120 s nachlauf while
+        # _running is still True, extending the block and triggering a
+        # phantom restart immediately after the pool actually stops.
+        if self._running and not self.in_nachlauf:
             self._cached_run_hours = run_hours_fresh
         run_hours = self._cached_run_hours or run_hours_fresh
 
@@ -690,7 +699,6 @@ class PoolPumpCoordinator:
             self._cached_run_hours = run_hours_fresh
             await self.async_ensure_running(self.normal_speed)
         elif not should_run and self._running:
-            await self._sample_water_temp_if_eligible()
             await self.async_ensure_stopped()
 
     def _should_run_now(self, now, window_start, window_end, run_hours):

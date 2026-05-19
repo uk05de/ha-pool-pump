@@ -55,7 +55,7 @@ class NotausButton(_BaseButton):
     """
 
     _attr_name = "Notaus"
-    _attr_icon = "mdi:stop-circle-outline"
+    _attr_icon = "mdi:stop-circle-outline"sc
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
