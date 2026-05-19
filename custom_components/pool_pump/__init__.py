@@ -4,6 +4,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.loader import async_get_integration
 
 from .const import DOMAIN
 from .coordinator import PoolPumpCoordinator
@@ -17,6 +18,12 @@ PLATFORMS = ["switch", "number", "sensor", "binary_sensor", "button"]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Pool Pump from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    # Pre-load platform modules in the executor so the subsequent
+    # async_forward_entry_setups doesn't do a blocking importlib call
+    # in the event loop (HA 2024.6+ warns about this).
+    integration = await async_get_integration(hass, DOMAIN)
+    await integration.async_get_platforms(PLATFORMS)
 
     coordinator = PoolPumpCoordinator(hass, entry)
     await coordinator.async_setup()
