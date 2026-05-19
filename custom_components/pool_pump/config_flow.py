@@ -264,11 +264,10 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         if not programs:
             desc = "Keine Programme konfiguriert."
         else:
-            lines = ["Programm | Drehzahl | Dauer | Danach", "--- | --- | --- | ---"]
+            lines = ["Programm | Drehzahl | Dauer", "--- | --- | ---"]
             for p in programs:
                 dur = f"{p['duration_min']} min" if p["duration_min"] > 0 else "manuell"
-                after = "Automatik" if p.get("resume_automatik") else "Manuell"
-                lines.append(f"{p['name']} | {p['speed']}% | {dur} | {after}")
+                lines.append(f"{p['name']} | {p['speed']}% | {dur}")
             desc = "\n".join(lines)
 
         return self.async_show_form(
@@ -284,7 +283,6 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 "name": user_input["name"],
                 "speed": int(user_input["speed"]),
                 "duration_min": int(user_input["duration_min"]),
-                "resume_automatik": bool(user_input.get("resume_automatik", False)),
             })
             options = dict(self._entry.options)
             options[CONF_PROGRAMS] = programs
@@ -298,7 +296,6 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             vol.Required("duration_min", default=5): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=1440, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
             ),
-            vol.Required("resume_automatik", default=False): bool,
         })
 
         return self.async_show_form(step_id="add_program", data_schema=schema)
@@ -333,7 +330,6 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 if p["name"] == self._edit_program_name:
                     p["speed"] = int(user_input["speed"])
                     p["duration_min"] = int(user_input["duration_min"])
-                    p["resume_automatik"] = bool(user_input.get("resume_automatik", False))
                     break
             options = dict(self._entry.options)
             options[CONF_PROGRAMS] = programs
@@ -346,7 +342,6 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             vol.Required("duration_min", default=prog["duration_min"]): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=1440, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
             ),
-            vol.Required("resume_automatik", default=bool(prog.get("resume_automatik", False))): bool,
         })
 
         return self.async_show_form(step_id="edit_program_values", data_schema=schema)

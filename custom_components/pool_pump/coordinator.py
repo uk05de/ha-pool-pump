@@ -45,6 +45,7 @@ from .const import (
     MIN_RUN_FOR_SAMPLE,
     SCHEDULER_INTERVAL,
     MIN_PAUSE_MINUTES,
+    FROST_HYSTERESIS_C,
     MODE_MANUAL,
     MODE_AUTOMATIK,
     TEMP_MIN_PLAUSIBLE,
@@ -477,25 +478,23 @@ class PoolPumpCoordinator:
             await self.async_ensure_stopped()
 
     async def _program_timed_stop(self, duration: float, program_name: str) -> None:
-        """Auto-stop a timed program after duration."""
+        """Auto-stop a timed program after duration.
+
+        Always falls back to manual mode. Auto-resume to automatik is not
+        offered because all current custom programs (Backwash etc.) require
+        a manual 6-way-valve change with the pump stopped first.
+        """
         await asyncio.sleep(duration)
         log.info("Program '%s' finished after %.0fs", program_name, duration)
         await self._sample_water_temp_if_eligible()
         await self.async_ensure_stopped()
-        # Check if this was the backwash program → reset counter
         if program_name == self.backwash_program_name:
             await self.async_reset_backwash_counter()
-        # Decide next state: resume automatik if program is flagged, else manual
-        prog = self._find_program(program_name)
-        resume = bool(prog and prog.get("resume_automatik"))
-        self._active_program = MODE_AUTOMATIK if resume else None
+        self._active_program = None
         self._program_task = None
         self._program_end_at = None
         await self._persist_state()
         self._notify()
-        if resume:
-            log.info("Program '%s' ended → resuming automatik", program_name)
-            await self._evaluate()
 
     async def async_pump_switch_off(self) -> None:
         """User turned off pump switch → cancel any active program, go manual."""
@@ -558,7 +557,16 @@ class PoolPumpCoordinator:
         if self.winter_override:
             frost_needed = True
         elif outside is not None:
-            threshold = self._find_threshold(outside)
+            # Hysteresis on the frost↔normal boundary: when we're already in
+            # frost mode, raise the bar for leaving by FROST_HYSTERESIS_C.
+            # This stops normal↔frost flapping when outside temp hovers near
+            # a threshold, which would otherwise toggle the pump (and the WP)
+            # every scheduler tick.
+            if self._auto_sub_mode == "frost_protection":
+                probe = outside - FROST_HYSTERESIS_C
+            else:
+                probe = outside
+            threshold = self._find_threshold(probe)
             if threshold is not None:
                 frost_needed = True
 

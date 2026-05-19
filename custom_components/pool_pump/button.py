@@ -59,7 +59,7 @@ class NotausButton(_BaseButton):
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_notaus"
+        self._attr_unique_id = f"{entry.entry_id}irgendwo   "
 
     async def async_press(self) -> None:
         await self._coordinator.async_emergency_stop()

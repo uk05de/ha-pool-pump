@@ -21,6 +21,9 @@ STOP_DELAY = 1.0            # seconds: wait after stop signal
 MIN_RUN_FOR_SAMPLE = 300.0  # seconds: pump must run this long before we trust water temp
 SCHEDULER_INTERVAL = 60.0   # seconds: how often the scheduler re-evaluates
 MIN_PAUSE_MINUTES = 30      # minutes: below this, don't bother pausing — run continuously
+FROST_HYSTERESIS_C = 1.0    # °C: temperature must rise this much above any threshold
+                            # before we leave frost protection — prevents flapping
+                            # when outside temp hovers near a boundary
 
 # Options keys — normal operation
 CONF_NORMAL_WINDOW_START = "normal_window_start"
@@ -30,9 +33,9 @@ CONF_NORMAL_TEMP_DIVISOR = "normal_temp_divisor"
 
 # Options keys — user-defined programs
 CONF_PROGRAMS = "programs"
-# Each: {name, speed, duration_min, resume_automatik}
+# Each: {name, speed, duration_min}
 #   duration_min=0      → runs until manually stopped
-#   resume_automatik    → after timed stop, switch to automatik (default: False → manual)
+#   (after a timed stop the integration falls back to manual mode)
 
 # Options keys — backwash reminder
 CONF_BACKWASH_INTERVAL_DAYS = "backwash_interval_days"

@@ -90,8 +90,7 @@
         "data": {
           "name": "Programmname",
           "speed": "Drehzahl",
-          "duration_min": "Dauer (0 = manuell stoppen)",
-          "resume_automatik": "Nach Ablauf in Automatik wechseln"
+          "duration_min": "Dauer (0 = manuell stoppen)"
         }
       },
       "edit_program": {
@@ -104,8 +103,7 @@
         "title": "Programm bearbeiten",
         "data": {
           "speed": "Drehzahl",
-          "duration_min": "Dauer (0 = manuell stoppen)",
-          "resume_automatik": "Nach Ablauf in Automatik wechseln"
+          "duration_min": "Dauer (0 = manuell stoppen)"
         }
       },
       "remove_program": {
