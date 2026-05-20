@@ -802,7 +802,12 @@ class PoolPumpCoordinator:
 
         should_run = in_window and self._should_run_now(now, window_start, window_end, run_hours)
 
-        if should_run and not self._running:
+        # in_nachlauf means we're mid-stop-sequence (pool still flowing, but a
+        # task is scheduled to actually stop it). If the schedule now wants us
+        # running again (e.g. user toggled automatik off → on during nachlauf),
+        # call ensure_running to cancel the pending stop and re-engage the
+        # downstream devices. ensure_stopped is idempotent against in_nachlauf.
+        if should_run and (not self._running or self.in_nachlauf):
             self._cached_run_hours = run_hours_fresh
             await self.async_ensure_running(self.normal_speed)
         elif not should_run and self._running:
