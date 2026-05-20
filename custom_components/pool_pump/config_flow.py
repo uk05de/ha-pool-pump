@@ -31,6 +31,10 @@ from .const import (
     CONF_HEAT_PUMP_PROGRAMS,
     CONF_HEAT_PUMP_SHUTDOWN_DELAY,
     DEFAULT_HEAT_PUMP_SHUTDOWN_DELAY,
+    CONF_DOSING_SWITCHES,
+    CONF_DOSING_PROGRAMS,
+    CONF_DOSING_SHUTDOWN_DELAY,
+    DEFAULT_DOSING_SHUTDOWN_DELAY,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
     MODE_AUTOMATIK,
@@ -223,6 +227,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 "edit_threshold": "Frostschutz-Schwelle bearbeiten",
                 "remove_threshold": "Frostschutz-Schwelle entfernen",
                 "heat_pump_settings": "Wärmepumpen-Steuerung",
+                "dosing_settings": "Dosieranlagen-Steuerung",
                 "test": "Testmodus",
             },
         )
@@ -561,6 +566,66 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="heat_pump_settings",
             data_schema=vol.Schema(fields),
+        )
+
+    # --- Dosing settings ---
+
+    async def async_step_dosing_settings(self, user_input=None):
+        if user_input is not None:
+            options = dict(self._entry.options)
+            options[CONF_DOSING_SWITCHES] = user_input.get(
+                CONF_DOSING_SWITCHES, []
+            ) or []
+            options[CONF_DOSING_PROGRAMS] = user_input.get(
+                CONF_DOSING_PROGRAMS, []
+            ) or []
+            options[CONF_DOSING_SHUTDOWN_DELAY] = int(
+                user_input[CONF_DOSING_SHUTDOWN_DELAY]
+            )
+            return self.async_create_entry(title="", data=options)
+
+        opts = self._entry.options
+        programs = opts.get(CONF_PROGRAMS, DEFAULT_PROGRAMS)
+        program_names = [MODE_AUTOMATIK] + [p["name"] for p in programs]
+
+        current_switches = opts.get(CONF_DOSING_SWITCHES, [])
+        current_progs = opts.get(CONF_DOSING_PROGRAMS, [])
+
+        schema = vol.Schema({
+            vol.Optional(
+                CONF_DOSING_SWITCHES,
+                default=current_switches,
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="switch", multiple=True),
+            ),
+            vol.Optional(
+                CONF_DOSING_PROGRAMS,
+                default=current_progs,
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(value=n, label=n)
+                        for n in program_names
+                    ],
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.LIST,
+                ),
+            ),
+            vol.Required(
+                CONF_DOSING_SHUTDOWN_DELAY,
+                default=opts.get(CONF_DOSING_SHUTDOWN_DELAY,
+                                 DEFAULT_DOSING_SHUTDOWN_DELAY),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=300, step=5, unit_of_measurement="s",
+                    mode=selector.NumberSelectorMode.BOX,
+                ),
+            ),
+        })
+
+        return self.async_show_form(
+            step_id="dosing_settings",
+            data_schema=schema,
         )
 
     # --- Test mode ---

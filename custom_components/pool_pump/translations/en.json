@@ -156,6 +156,15 @@
           "heat_pump_shutdown_delay": "Nachlaufzeit (s) nach WP-Aus, bevor die Pool-Pumpe stoppt"
         }
       },
+      "dosing_settings": {
+        "title": "Dosieranlagen-Steuerung",
+        "description": "Schaltet die Dosierpumpen mit der Pool-Pumpe an/aus. Beim Stoppen werden sie vor der Pool-Pumpe ausgeschaltet, damit die Restchemie ausgespült werden kann. Mit-Schalt-Wunsch wird über den Switch 'Dosieranlage mit-schalten' gesetzt.",
+        "data": {
+          "dosing_switches": "Dosierpumpen-Schalter (eine oder mehrere)",
+          "dosing_programs": "Programme, in denen die Dosierung mit-geschaltet wird",
+          "dosing_shutdown_delay": "Spül-Nachlaufzeit (s) nach Dosier-Aus, bevor die Pool-Pumpe stoppt"
+        }
+      },
       "test": {
         "title": "Testmodus",
         "description": "Im Testmodus werden keine Befehle an die Shellys gesendet.",

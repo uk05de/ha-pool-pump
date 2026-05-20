@@ -53,14 +53,28 @@ CONF_WINTER_THRESHOLDS = "winter_thresholds"
 # Each: {below_temp, interval_min, duration_min, speed}
 # interval_min=0 + duration_min=0 → continuous
 
-# Options keys — heat pump (pool pump gates the heat pump's power switch).
-# Whether the user wants heating is a separate switch entity stored in the
-# coordinator state, so toggling it does not reload the entry (which would
-# kill any running program).
+# Options keys — downstream devices that follow the pool pump's run state.
+# Each device has its own user-controlled "mit-schalten" switch persisted
+# in the coordinator store (NOT in entry.options) so toggling it doesn't
+# reload the entry and kill any running program. When stopping the pool
+# pump, all configured downstream devices are turned off first; the pool
+# keeps flowing for max(device.shutdown_delay) seconds before the actual
+# pool stop, so heat exchangers cool down and dosing chemistry flushes out.
+
+# Heat pump
 CONF_HEAT_PUMP_POWER_ENTITY = "heat_pump_power_entity"
 CONF_HEAT_PUMP_PROGRAMS = "heat_pump_programs"        # list of program names allowed to heat
 CONF_HEAT_PUMP_SHUTDOWN_DELAY = "heat_pump_shutdown_delay"
 DEFAULT_HEAT_PUMP_SHUTDOWN_DELAY = 120  # seconds — HP run-out before pool pump stops
+
+# Dosing system (one or more switches that enable individual dosing pumps,
+# e.g. Bayrol pH and Cl automatik-steuerung). Always disabled together with
+# the pool pump so leftover chemistry can flush out of the dosing cell
+# before flow stops.
+CONF_DOSING_SWITCHES = "dosing_switches"              # list of switch entity IDs
+CONF_DOSING_PROGRAMS = "dosing_programs"              # list of program names allowed to dose
+CONF_DOSING_SHUTDOWN_DELAY = "dosing_shutdown_delay"
+DEFAULT_DOSING_SHUTDOWN_DELAY = 30  # seconds — flush time, shorter than HP thermo-runout
 
 # Options keys — test/debug
 CONF_TEST_MODE = "test_mode"

@@ -32,6 +32,9 @@ async def async_setup_entry(
     if coordinator.heat_pump_configured:
         entities.append(HeatPumpEnabledSwitch(coordinator, entry))
 
+    if coordinator.dosing_configured:
+        entities.append(DosingEnabledSwitch(coordinator, entry))
+
     # Create a switch for each user-defined program
     for prog in coordinator.programs:
         entities.append(TimedProgramSwitch(coordinator, entry, prog))
@@ -171,6 +174,33 @@ class HeatPumpEnabledSwitch(_BaseSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._coordinator.async_set_heat_pump_enabled(False)
+
+
+class DosingEnabledSwitch(_BaseSwitch):
+    """User-controlled gate: should the pool pump co-switch the dosing pumps?
+
+    OFF → pool pump never touches the dosing switches, regardless of program.
+    ON → dosing follows pool pump cycles when the active program is in the
+    dosing_programs allowlist. On stop, dosing is killed first and the pool
+    keeps flowing for shutdown_delay seconds to flush chemistry.
+    """
+
+    _attr_name = "Dosieranlage mit-schalten"
+    _attr_icon = "mdi:flask-outline"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_dosing_enabled"
+
+    @property
+    def is_on(self) -> bool:
+        return self._coordinator.dosing_enabled
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._coordinator.async_set_dosing_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._coordinator.async_set_dosing_enabled(False)
 
 
 class WinterOverrideSwitch(_BaseSwitch):
