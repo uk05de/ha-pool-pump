@@ -78,6 +78,10 @@ class PumpSwitch(_BaseSwitch):
         return self._coordinator.running
 
     async def async_turn_on(self, **kwargs) -> None:
+        if self._coordinator.active_program == MODE_AUTOMATIK:
+            # The scheduler would undo it on its next tick anyway
+            log.info("Pump turn-on ignored — automatik is active")
+            return
         speed = self._coordinator.target_speed or self._coordinator.normal_speed
         await self._coordinator.async_ensure_running(speed)
 

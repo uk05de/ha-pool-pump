@@ -10,6 +10,7 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.storage import Store
 
 from .const import (
@@ -89,6 +90,10 @@ STORAGE_KEY = f"{DOMAIN}_state"
 STORAGE_VERSION = 1
 
 
+def _parse_dt(value: str | None) -> datetime | None:
+    return dt_util.parse_datetime(value) if value else None
+
+
 class PoolPumpCoordinator:
     """Central brain — program switches, scheduler, Shelly driver."""
 
@@ -157,6 +162,12 @@ class PoolPumpCoordinator:
         self._listeners: list = []
         self._lock = asyncio.Lock()
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+
+        # Restart handling: the stored state is kept until the hardware has
+        # been reconciled (after HA has started); the scheduler waits for it.
+        self._restored: dict = {}
+        self._setup_program: str | None = None
+        self._ready = asyncio.Event()
 
     # --- Options accessors ---
 
@@ -425,7 +436,7 @@ class PoolPumpCoordinator:
             return None
         try:
             last = datetime.fromisoformat(self._last_backwash_date).date()
-            return (datetime.now().date() - last).days
+            return (dt_util.now().date() - last).days
         except ValueError:
             return None
 
@@ -468,33 +479,149 @@ class PoolPumpCoordinator:
     # --- Lifecycle ---
 
     async def async_setup(self) -> None:
-        stored = await self._store.async_load()
-        restored_program: str | None = None
+        stored = await self._store.async_load() or {}
+        self._restored = stored
+        restored_program: str | None = stored.get("active_program")
         if stored:
             self._buffered_water_temp = stored.get("buffered_water_temp")
             self._last_backwash_date = stored.get("last_backwash_date")
-            restored_program = stored.get("active_program")
             self._heat_pump_enabled = bool(stored.get("heat_pump_enabled", False))
             self._dosing_enabled = bool(stored.get("dosing_enabled", False))
             log.info(
                 "Restored buffered water temp: %s°C, last backwash: %s, "
-                "active program: %s, heat pump enabled: %s, dosing enabled: %s",
+                "active program: %s, running: %s, heat pump enabled: %s, "
+                "dosing enabled: %s",
                 self._buffered_water_temp, self._last_backwash_date,
-                restored_program, self._heat_pump_enabled, self._dosing_enabled,
+                restored_program, stored.get("running"),
+                self._heat_pump_enabled, self._dosing_enabled,
             )
-        self._scheduler_task = self.entry.async_create_background_task(
-            self.hass, self._scheduler_loop(), "pool_pump_scheduler"
-        )
 
-        # Restore automatik across reloads / HA restart. Timed programs are
-        # intentionally NOT restored — their remaining runtime is unknown
-        # and blindly restarting could run the pump when the user didn't
-        # ask for it.
+        # Automatik is restored right away; timed programs, manual runs and
+        # an interrupted nachlauf need the real Shelly state first — see
+        # `_async_reconcile_hardware`.
         if restored_program == MODE_AUTOMATIK:
             self._active_program = MODE_AUTOMATIK
             log.info("Re-activating automatik from persisted state")
+        self._setup_program = self._active_program
+
+        self._scheduler_task = self.entry.async_create_background_task(
+            self.hass, self._scheduler_loop(), "pool_pump_scheduler"
+        )
+        # Shelly states are only meaningful once HA has started (runs
+        # immediately on an entry reload).
+        self.entry.async_on_unload(
+            async_at_started(self.hass, self._async_reconcile_hardware)
+        )
 
         log.info("Pool Pump coordinator started (test_mode=%s)", self.test_mode)
+
+    # --- Restart reconciliation ---
+
+    def _hardware_running(self) -> bool:
+        start = self.hass.states.get(self._start_switch)
+        if not start or start.state != "on":
+            return False
+        if self.simple_mode:
+            return True
+        power = self.hass.states.get(self._power_switch)
+        return bool(power and power.state == "on")
+
+    def _hardware_speed(self) -> float:
+        if self.simple_mode:
+            return 100
+        state = self.hass.states.get(self._speed_number)
+        try:
+            if self._speed_number.startswith("light."):
+                if state.state != "on":
+                    return 0
+                return round(state.attributes.get("brightness", 0) / 255 * 100)
+            return float(state.state)
+        except (AttributeError, TypeError, ValueError):
+            return self.normal_speed
+
+    async def _async_reconcile_hardware(self, _hass: HomeAssistant | None = None) -> None:
+        """Align coordinator state with the real Shelly state after (re)start.
+
+        Shelly relays keep their state across HA restarts and entry reloads,
+        so the pump may still be running although a fresh coordinator
+        believes it is stopped. Adopt the real state first, then finish
+        whatever was in flight before (nachlauf, timed program, manual run).
+        """
+        try:
+            await self._reconcile()
+        except Exception:
+            log.exception("Hardware reconcile failed")
+        finally:
+            self._restored = {}
+            self._ready.set()
+            self._notify()
+
+    async def _reconcile(self) -> None:
+        stored = self._restored
+        if self._hardware_running():
+            async with self._lock:
+                self._running = True
+                # Water temp sampling restarts its MIN_RUN_FOR_SAMPLE window.
+                self._run_start_time = time.monotonic()
+                self._target_speed = self._hardware_speed()
+            log.info("Pump found running at %.0f%% — adopting", self._target_speed)
+
+        if self._active_program != self._setup_program:
+            return  # user already switched programs — don't override that
+
+        now = dt_util.now()
+        program = stored.get("active_program")
+        nachlauf_end = _parse_dt(stored.get("nachlauf_end_at"))
+
+        if nachlauf_end is not None:
+            if self._running:
+                remaining = max(0.0, (nachlauf_end - now).total_seconds())
+                log.info("Resuming interrupted nachlauf (%.0fs left)", remaining)
+                self._nachlauf_end_at = now + timedelta(seconds=remaining)
+                self._nachlauf_task = self.entry.async_create_background_task(
+                    self.hass, self._nachlauf_then_stop(remaining),
+                    "pool_pump_nachlauf",
+                )
+        elif program not in (None, MODE_AUTOMATIK):
+            prog = self._find_program(program)
+            if prog:
+                await self._restore_timed_program(
+                    prog, _parse_dt(stored.get("program_end_at")), now
+                )
+        elif program is None and stored.get("running") and not self._running:
+            speed = stored.get("target_speed") or self.normal_speed
+            log.info("Manual run was interrupted — restarting at %.0f%%", speed)
+            await self.async_ensure_running(speed)
+
+        await self._persist_state()
+
+    async def _restore_timed_program(
+        self, prog: dict, end_at: datetime | None, now: datetime
+    ) -> None:
+        name = prog["name"]
+        continuous = prog["duration_min"] == 0
+
+        if not self._running and not continuous:
+            # Pump went down together with HA (power cut?). Don't restart a
+            # timed program on our own — Backwash etc. need the 6-way valve
+            # set by hand with the pump stopped.
+            log.info("Program '%s' was interrupted with pump off — not resuming", name)
+            return
+
+        self._active_program = name
+        if continuous:
+            log.info("Resuming continuous program '%s'", name)
+            if not self._running:
+                await self.async_ensure_running(prog["speed"])
+            return
+
+        remaining = max(0.0, (end_at - now).total_seconds()) if end_at else 0.0
+        log.info("Resuming program '%s' (%.0fs left)", name, remaining)
+        self._program_end_at = now + timedelta(seconds=remaining)
+        self._program_task = self.entry.async_create_background_task(
+            self.hass, self._program_timed_stop(remaining, name),
+            f"pool_pump_{name}",
+        )
 
     async def async_shutdown(self) -> None:
         if self._scheduler_task and not self._scheduler_task.done():
@@ -515,6 +642,15 @@ class PoolPumpCoordinator:
             "active_program": self._active_program,
             "heat_pump_enabled": self._heat_pump_enabled,
             "dosing_enabled": self._dosing_enabled,
+            # Run state — lets `_reconcile` finish what a restart interrupted
+            "running": self._running,
+            "target_speed": self._target_speed,
+            "program_end_at": (
+                self._program_end_at.isoformat() if self._program_end_at else None
+            ),
+            "nachlauf_end_at": (
+                self._nachlauf_end_at.isoformat() if self._nachlauf_end_at else None
+            ),
         })
 
     # --- Program switching ---
@@ -555,6 +691,7 @@ class PoolPumpCoordinator:
                         self._program_timed_stop(duration_sec, program_name),
                         f"pool_pump_{program_name}",
                     )
+                    await self._persist_state()
                     self._notify()
 
     async def async_deactivate_program(self, program_name: str) -> None:
@@ -629,7 +766,7 @@ class PoolPumpCoordinator:
     # --- Scheduler (only runs when automatik is active) ---
 
     async def _scheduler_loop(self) -> None:
-        await asyncio.sleep(10)
+        await self._ready.wait()
         while True:
             try:
                 if self._active_program == MODE_AUTOMATIK:
@@ -646,7 +783,7 @@ class PoolPumpCoordinator:
             return
         if not self.backwash_overdue:
             return
-        today = datetime.now().date().isoformat()
+        today = dt_util.now().date().isoformat()
         if self._last_notification_date == today:
             return  # already notified today
         self._last_notification_date = today
@@ -692,11 +829,11 @@ class PoolPumpCoordinator:
         else:
             if self._running and self._auto_sub_mode == "frost_protection":
                 await self.async_ensure_stopped()
-                self._frost_cycle_start = None
-                self._current_frost_threshold = None
                 if self._program_task and not self._program_task.done():
                     self._program_task.cancel()
                     self._program_task = None
+            self._frost_cycle_start = None
+            self._current_frost_threshold = None
             self._auto_sub_mode = "normal"
             self._notify()
             await self._handle_normal_mode()
@@ -710,12 +847,34 @@ class PoolPumpCoordinator:
                 match = t
         return match
 
-    async def _handle_frost_mode(self, outside: float | None) -> None:
-        if outside is None:
-            threshold = self.thresholds[-1] if self.thresholds else None
-        else:
-            threshold = self._find_threshold(outside)
+    def _frost_threshold_for(self, outside: float | None) -> dict | None:
+        """Threshold to apply while frost protection is active.
 
+        - No outside temp (sensor down): strictest threshold — fail safe.
+        - Above every threshold (winter override, or inside the hysteresis
+          band on the way out): mildest threshold as base circulation, so
+          the pump never sits idle while frost protection is active.
+        - Moving to a milder threshold also needs FROST_HYSTERESIS_C, so
+          speed and cycle don't flap while the temp hovers on a boundary.
+        """
+        if not self.thresholds:
+            return None
+        if outside is None:
+            return min(self.thresholds, key=lambda t: t["below_temp"])
+        threshold = self._find_threshold(outside) or max(
+            self.thresholds, key=lambda t: t["below_temp"]
+        )
+        current = self._current_frost_threshold
+        if (
+            current is not None
+            and current["below_temp"] < threshold["below_temp"]
+            and outside - FROST_HYSTERESIS_C < current["below_temp"]
+        ):
+            return current
+        return threshold
+
+    async def _handle_frost_mode(self, outside: float | None) -> None:
+        threshold = self._frost_threshold_for(outside)
         if not threshold:
             return
 
@@ -726,7 +885,7 @@ class PoolPumpCoordinator:
         )
 
         # Already running a frost cycle — react to changes
-        if self._running and self._auto_sub_mode == "frost_protection":
+        if self._running and self._frost_cycle_start is not None:
             if threshold_changed:
                 self._current_frost_threshold = threshold
                 log.info("Frost threshold changed: adjusting to below %d°C, speed %d%%",
@@ -748,19 +907,26 @@ class PoolPumpCoordinator:
                     )
             return
 
-        # Not running — start if needed
+        # A stop is in progress (end of a normal block / frost cycle) — let
+        # it finish, the next tick starts fresh.
+        if self.in_nachlauf:
+            return
+
+        # No cycle running — start one if due. The pump may already be on
+        # without a cycle (adopted after a restart): then the cycle just
+        # takes it over, instead of leaving it running without a timer.
         self._current_frost_threshold = threshold
 
         if is_continuous:
-            log.info("Frost: continuous at %d%% (outside=%.1f°C)", threshold["speed"], outside or 0)
+            log.info("Frost: continuous at %d%% (outside=%s°C)", threshold["speed"], outside)
             self._frost_cycle_start = time.monotonic()
             await self.async_ensure_running(threshold["speed"])
         else:
             now = time.monotonic()
             interval_sec = threshold["interval_min"] * 60
             if self._last_frost_run_end is None or (now - self._last_frost_run_end) >= interval_sec:
-                log.info("Frost: %dmin at %d%% (outside=%.1f°C)",
-                         threshold["duration_min"], threshold["speed"], outside or 0)
+                log.info("Frost: %dmin at %d%% (outside=%s°C)",
+                         threshold["duration_min"], threshold["speed"], outside)
                 self._frost_cycle_start = time.monotonic()
                 await self.async_ensure_running(threshold["speed"])
                 self._program_task = self.entry.async_create_background_task(
@@ -768,6 +934,9 @@ class PoolPumpCoordinator:
                     self._frost_timed_stop(threshold["duration_min"] * 60),
                     "pool_pump_frost",
                 )
+            elif self._running:
+                # Running outside of any cycle while the interval isn't due
+                await self.async_ensure_stopped()
 
     async def _frost_timed_stop(self, duration: float) -> None:
         await asyncio.sleep(duration)
@@ -781,7 +950,7 @@ class PoolPumpCoordinator:
     # --- Normal operation ---
 
     async def _handle_normal_mode(self) -> None:
-        now = datetime.now()
+        now = dt_util.now()
         window_start = self._parse_time(self.normal_window_start)
         window_end = self._parse_time(self.normal_window_end)
         if not window_start or not window_end:
@@ -908,6 +1077,7 @@ class PoolPumpCoordinator:
         if not self._running:
             self._run_start_time = time.monotonic()
         self._running = True
+        await self._persist_state()
         self._notify()
 
     async def _stop_pool_pump_hardware(self):
@@ -923,6 +1093,7 @@ class PoolPumpCoordinator:
         self._target_speed = 0
         self._running = False
         self._run_start_time = None
+        await self._persist_state()
         self._notify()
 
     # --- Pool pump high-level run/stop (with downstream gating) ---
@@ -1001,6 +1172,7 @@ class PoolPumpCoordinator:
             # down gracefully and its delay is > 0.
             if took_down_co_controlled and not immediate and max_delay > 0:
                 self._nachlauf_end_at = dt_util.now() + timedelta(seconds=max_delay)
+                await self._persist_state()
                 self._notify()
                 self._nachlauf_task = self.entry.async_create_background_task(
                     self.hass, self._nachlauf_then_stop(max_delay),
@@ -1033,6 +1205,7 @@ class PoolPumpCoordinator:
         async with self._lock:
             await self._set_speed_entity(speed)
             self._target_speed = speed
+            await self._persist_state()
             self._notify()
 
     # --- Downstream user toggle ("mit-schalten" switches) ---
@@ -1154,7 +1327,7 @@ class PoolPumpCoordinator:
 
     async def async_reset_backwash_counter(self) -> None:
         """Reset the backwash counter to today."""
-        self._last_backwash_date = datetime.now().date().isoformat()
+        self._last_backwash_date = dt_util.now().date().isoformat()
         self._last_notification_date = None
         await self._persist_state()
         self._notify()
