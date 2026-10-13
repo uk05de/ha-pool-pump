@@ -8,3 +8,5 @@ __pycache__/
 
 # Lokale Analyse-Tools, nicht für das Repo
 /tools/
+spielwiese/
+CLAUDE.local.md
