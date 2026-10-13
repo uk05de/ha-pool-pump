@@ -76,6 +76,19 @@ CONF_DOSING_PROGRAMS = "dosing_programs"              # list of program names al
 CONF_DOSING_SHUTDOWN_DELAY = "dosing_shutdown_delay"
 DEFAULT_DOSING_SHUTDOWN_DELAY = 30  # seconds — flush time, shorter than HP thermo-runout
 
+# Options keys — frost watchdog. Equipment (pump, filter) sits in a room,
+# the pipes to the pool run outside: a cold room forces continuous
+# circulation, and problems that leave the system unprotected are pushed
+# to the user's phone.
+CONF_NOTIFY_SERVICE = "notify_service"    # e.g. "notify.mobile_app_pixel"; None = HA notification only
+CONF_ROOM_FROST_TEMP = "room_frost_temp"  # °C: below this the pump runs continuously
+DEFAULT_ROOM_FROST_TEMP = 3.0
+CONF_WATER_WARN_TEMP = "water_warn_temp"  # °C: warn when pool water gets this cold
+DEFAULT_WATER_WARN_TEMP = 2.0
+WATCHDOG_GRACE_UNPROTECTED = 1800.0  # s: automatik off + pump stopped (room for backwash handling)
+WATCHDOG_GRACE_HARDWARE = 300.0      # s: Shelly unavailable / state mismatch (reconnects)
+WATCHDOG_GRACE_SENSOR = 900.0        # s: outside sensor unavailable
+
 # Options keys — test/debug
 CONF_TEST_MODE = "test_mode"
 

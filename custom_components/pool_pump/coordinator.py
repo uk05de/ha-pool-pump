@@ -44,6 +44,14 @@ from .const import (
     CONF_DOSING_PROGRAMS,
     CONF_DOSING_SHUTDOWN_DELAY,
     DEFAULT_DOSING_SHUTDOWN_DELAY,
+    CONF_NOTIFY_SERVICE,
+    CONF_ROOM_FROST_TEMP,
+    DEFAULT_ROOM_FROST_TEMP,
+    CONF_WATER_WARN_TEMP,
+    DEFAULT_WATER_WARN_TEMP,
+    WATCHDOG_GRACE_UNPROTECTED,
+    WATCHDOG_GRACE_HARDWARE,
+    WATCHDOG_GRACE_SENSOR,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
     POWER_ON_DELAY,
@@ -126,6 +134,15 @@ class PoolPumpCoordinator:
         # Automatik sub-mode (normal vs frost — only relevant when automatik is active)
         self._auto_sub_mode: str | None = None  # "normal" or "frost_protection"
 
+        # Technikraum below room_frost_temp (with hysteresis) → frost
+        # protection runs continuously. Updated every scheduler tick.
+        self._room_cold = False
+
+        # Frost watchdog: condition key → first seen (monotonic), and the
+        # conditions that have outlasted their grace period and were sent.
+        self._watch_since: dict[str, float] = {}
+        self._watch_alerts: dict[str, str] = {}
+
         # run_hours is only recalculated while the pump is running. This
         # prevents a water-temp sample (taken right at block end) from
         # shifting the block schedule and causing a phantom restart.
@@ -207,6 +224,18 @@ class PoolPumpCoordinator:
     @property
     def temp_divisor(self) -> float:
         return self.entry.options.get(CONF_NORMAL_TEMP_DIVISOR, 2.0)
+
+    @property
+    def notify_service(self) -> str | None:
+        return self.entry.options.get(CONF_NOTIFY_SERVICE) or None
+
+    @property
+    def room_frost_temp(self) -> float:
+        return self.entry.options.get(CONF_ROOM_FROST_TEMP, DEFAULT_ROOM_FROST_TEMP)
+
+    @property
+    def water_warn_temp(self) -> float:
+        return self.entry.options.get(CONF_WATER_WARN_TEMP, DEFAULT_WATER_WARN_TEMP)
 
     # --- Heat pump accessors ---
 
@@ -769,9 +798,11 @@ class PoolPumpCoordinator:
         await self._ready.wait()
         while True:
             try:
+                self._update_room_cold()
                 if self._active_program == MODE_AUTOMATIK:
                     await self._evaluate()
                 await self._check_backwash_reminder()
+                await self._check_frost_watchdog()
             except Exception:
                 log.exception("Scheduler error")
             await asyncio.sleep(SCHEDULER_INTERVAL)
@@ -796,6 +827,184 @@ class PoolPumpCoordinator:
         )
         log.info("Backwash reminder sent: %s", msg)
 
+    # --- Frost watchdog ---
+
+    def _update_room_cold(self) -> None:
+        room = self.room_temperature
+        if room is None:
+            self._room_cold = False
+            return
+        limit = self.room_frost_temp
+        if self._room_cold:
+            limit += FROST_HYSTERESIS_C
+        if (room < limit) != self._room_cold:
+            self._room_cold = room < limit
+            log.info("Technikraum %.1f°C → room frost %s", room,
+                     "active" if self._room_cold else "cleared")
+
+    def _frost_relevant(self) -> bool:
+        """Is it cold enough that the pool needs frost protection?
+
+        An unavailable outside sensor counts as relevant — we can't rule
+        frost out, so the watchdog should keep watching.
+        """
+        if self.winter_override or self._room_cold:
+            return True
+        if not self.thresholds:
+            return False
+        if self._outside_temps:
+            outside = self.outside_temperature
+            if outside is None:
+                return True
+            mildest = max(t["below_temp"] for t in self.thresholds)
+            return outside < mildest
+        return False
+
+    def _watchdog_conditions(self) -> dict[str, tuple[float, str, str]]:
+        """Currently true problems → (grace seconds, title, message)."""
+        conds: dict[str, tuple[float, str, str]] = {}
+        frost = self._frost_relevant()
+
+        if frost and self._active_program != MODE_AUTOMATIK and not self._running:
+            conds["unprotected"] = (
+                WATCHDOG_GRACE_UNPROTECTED, "Frostschutz inaktiv",
+                "Es ist frostig, aber die Automatik ist aus und die Pumpe steht. "
+                "Programm Automatik wieder einschalten!",
+            )
+
+        if frost:
+            hw = [e for e in (self._power_switch, self._speed_number, self._start_switch) if e]
+            unavailable = [
+                e for e in hw
+                if (st := self.hass.states.get(e)) is None
+                or st.state in ("unavailable", "unknown")
+            ]
+            if unavailable:
+                conds["hardware"] = (
+                    WATCHDOG_GRACE_HARDWARE, "Shelly nicht erreichbar",
+                    "Pumpensteuerung nicht erreichbar: " + ", ".join(unavailable)
+                    + ". Frostschutz kann die Pumpe nicht schalten.",
+                )
+            elif self._running and not self.test_mode and not self._hardware_running():
+                conds["mismatch"] = (
+                    WATCHDOG_GRACE_HARDWARE, "Pumpe steht unerwartet",
+                    "Die Pumpe sollte laufen, laut Shelly ist sie aber aus "
+                    "(von außen abgeschaltet?).",
+                )
+
+        if self._outside_temps and self.outside_temperature is None:
+            conds["outside_sensor"] = (
+                WATCHDOG_GRACE_SENSOR, "Außentemperatur fehlt",
+                "Kein Außentemperatur-Sensor verfügbar. Frostschutz läuft nur mit "
+                "erzwungenem Wintermodus — dann auf der strengsten Stufe.",
+            )
+
+        if self._room_cold:
+            room = self.room_temperature
+            conds["room_cold"] = (
+                0, "Technikraum kalt",
+                f"Technikraum nur {room:.1f} °C — Pumpe läuft im Dauerbetrieb, "
+                "solange Automatik aktiv ist.",
+            )
+
+        # The live water temp is only meaningful with water flowing past the
+        # probe; otherwise use the buffered value sampled at the last stop.
+        water = self._buffered_water_temp
+        if (
+            self._running and self._run_start_time is not None
+            and time.monotonic() - self._run_start_time >= MIN_RUN_FOR_SAMPLE
+            and self.water_temperature is not None
+        ):
+            water = self.water_temperature
+        water_limit = self.water_warn_temp
+        if "water_cold" in self._watch_alerts:
+            water_limit += FROST_HYSTERESIS_C  # don't flap on noisy readings
+        if water is not None and water < water_limit:
+            conds["water_cold"] = (
+                0, "Poolwasser sehr kalt",
+                f"Wassertemperatur {water:.1f} °C — Eisbildung im Pool möglich.",
+            )
+        return conds
+
+    async def _check_frost_watchdog(self) -> None:
+        conds = self._watchdog_conditions()
+        now = time.monotonic()
+        changed = False
+
+        for key in list(self._watch_since):
+            if key in conds:
+                continue
+            del self._watch_since[key]
+            title = self._watch_alerts.pop(key, None)
+            if title is not None:
+                changed = True
+                await self._send_alert(key, f"Erledigt: {title}",
+                                       "Problem besteht nicht mehr.", resolved=True)
+
+        for key, (grace, title, message) in conds.items():
+            since = self._watch_since.setdefault(key, now)
+            if key not in self._watch_alerts and now - since >= grace:
+                self._watch_alerts[key] = title
+                changed = True
+                await self._send_alert(key, title, message)
+
+        if changed:
+            self._notify()
+
+    async def _send_alert(
+        self, key: str, title: str, message: str, *, resolved: bool = False
+    ) -> None:
+        """Push to the configured notify service + HA notification.
+
+        Not routed through `_call`: alerts must also work in test mode.
+        """
+        log.warning("Frost watchdog: %s — %s", title, message)
+        notification_id = f"pool_pump_frost_{key}"
+        try:
+            if resolved:
+                await self.hass.services.async_call(
+                    "persistent_notification", "dismiss",
+                    {"notification_id": notification_id}, blocking=False,
+                )
+            else:
+                await self.hass.services.async_call(
+                    "persistent_notification", "create",
+                    {"title": f"Pool — {title}", "message": message,
+                     "notification_id": notification_id},
+                    blocking=False,
+                )
+            await self._push(f"Pool — {title}", message, urgent=not resolved)
+        except Exception:
+            log.exception("Sending frost alert failed")
+
+    async def _push(self, title: str, message: str, *, urgent: bool) -> None:
+        service = self.notify_service
+        if not service:
+            return
+        name = service.removeprefix("notify.")
+        data: dict = {"title": title, "message": message}
+        if urgent and name.startswith("mobile_app_"):
+            # Break through focus modes (iOS) / deliver immediately (Android)
+            data["data"] = {
+                "push": {"interruption-level": "time-sensitive"},
+                "ttl": 0, "priority": "high",
+            }
+        await self.hass.services.async_call("notify", name, data, blocking=False)
+
+    async def async_send_test_alert(self) -> None:
+        await self._push(
+            "Pool — Test", "Frost-Wächter Benachrichtigung funktioniert.", urgent=True
+        )
+
+    @property
+    def frost_alerts(self) -> list[str]:
+        """Titles of the watchdog alerts currently raised."""
+        return list(self._watch_alerts.values())
+
+    @property
+    def room_cold(self) -> bool:
+        return self._room_cold
+
     async def _evaluate(self) -> None:
         """Decide what automatik should do right now."""
         if self._active_program != MODE_AUTOMATIK:
@@ -804,7 +1013,7 @@ class PoolPumpCoordinator:
         outside = self.outside_temperature
         frost_needed = False
 
-        if self.winter_override:
+        if self.winter_override or self._room_cold:
             frost_needed = True
         elif outside is not None:
             # Hysteresis on the frost↔normal boundary: when we're already in
@@ -860,17 +1069,25 @@ class PoolPumpCoordinator:
         if not self.thresholds:
             return None
         if outside is None:
-            return min(self.thresholds, key=lambda t: t["below_temp"])
-        threshold = self._find_threshold(outside) or max(
-            self.thresholds, key=lambda t: t["below_temp"]
-        )
-        current = self._current_frost_threshold
-        if (
-            current is not None
-            and current["below_temp"] < threshold["below_temp"]
-            and outside - FROST_HYSTERESIS_C < current["below_temp"]
-        ):
-            return current
+            threshold = min(self.thresholds, key=lambda t: t["below_temp"])
+        else:
+            threshold = self._find_threshold(outside) or max(
+                self.thresholds, key=lambda t: t["below_temp"]
+            )
+            current = self._current_frost_threshold
+            if (
+                current is not None
+                and current["below_temp"] < threshold["below_temp"]
+                and outside - FROST_HYSTERESIS_C < current["below_temp"]
+            ):
+                threshold = next(
+                    (t for t in self.thresholds if t["below_temp"] == current["below_temp"]),
+                    threshold,
+                )
+        # Cold Technikraum: keep the threshold's speed, but never pause —
+        # the pool water (warmer than the room) keeps pump and filter ice-free.
+        if self._room_cold and (threshold["interval_min"] or threshold["duration_min"]):
+            threshold = {**threshold, "interval_min": 0, "duration_min": 0}
         return threshold
 
     async def _handle_frost_mode(self, outside: float | None) -> None:
@@ -881,7 +1098,7 @@ class PoolPumpCoordinator:
         is_continuous = threshold["interval_min"] == 0 and threshold["duration_min"] == 0
         threshold_changed = (
             self._current_frost_threshold is not None
-            and threshold["below_temp"] != self._current_frost_threshold["below_temp"]
+            and threshold != self._current_frost_threshold
         )
 
         # Already running a frost cycle — react to changes

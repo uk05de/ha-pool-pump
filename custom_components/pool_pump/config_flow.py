@@ -35,10 +35,18 @@ from .const import (
     CONF_DOSING_PROGRAMS,
     CONF_DOSING_SHUTDOWN_DELAY,
     DEFAULT_DOSING_SHUTDOWN_DELAY,
+    CONF_NOTIFY_SERVICE,
+    CONF_ROOM_FROST_TEMP,
+    DEFAULT_ROOM_FROST_TEMP,
+    CONF_WATER_WARN_TEMP,
+    DEFAULT_WATER_WARN_TEMP,
     DEFAULT_PROGRAMS,
     DEFAULT_THRESHOLDS,
     MODE_AUTOMATIK,
 )
+
+
+_NO_NOTIFY = "none"
 
 
 def _make_helpers(defaults: dict | None):
@@ -226,6 +234,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 "add_threshold": "Frostschutz-Schwelle hinzufügen",
                 "edit_threshold": "Frostschutz-Schwelle bearbeiten",
                 "remove_threshold": "Frostschutz-Schwelle entfernen",
+                "frost_watchdog": "Frost-Wächter & Benachrichtigung",
                 "heat_pump_settings": "Wärmepumpen-Steuerung",
                 "dosing_settings": "Dosieranlagen-Steuerung",
                 "test": "Testmodus",
@@ -567,6 +576,60 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             step_id="heat_pump_settings",
             data_schema=vol.Schema(fields),
         )
+
+    # --- Frost watchdog ---
+
+    async def async_step_frost_watchdog(self, user_input=None):
+        if user_input is not None:
+            options = dict(self._entry.options)
+            service = user_input.get(CONF_NOTIFY_SERVICE)
+            options[CONF_NOTIFY_SERVICE] = (
+                None if not service or service == _NO_NOTIFY else service
+            )
+            options[CONF_ROOM_FROST_TEMP] = float(user_input[CONF_ROOM_FROST_TEMP])
+            options[CONF_WATER_WARN_TEMP] = float(user_input[CONF_WATER_WARN_TEMP])
+            return self.async_create_entry(title="", data=options)
+
+        opts = self._entry.options
+        services = sorted(
+            f"notify.{name}"
+            for name in self.hass.services.async_services().get("notify", {})
+            if name not in ("send_message", "persistent_notification")
+        )
+        current = opts.get(CONF_NOTIFY_SERVICE) or _NO_NOTIFY
+        schema = vol.Schema({
+            vol.Required(CONF_NOTIFY_SERVICE, default=current): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(
+                            value=_NO_NOTIFY, label="Keine (nur HA-Benachrichtigung)"
+                        ),
+                        *(selector.SelectOptionDict(value=s, label=s) for s in services),
+                    ],
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                ),
+            ),
+            vol.Required(
+                CONF_ROOM_FROST_TEMP,
+                default=opts.get(CONF_ROOM_FROST_TEMP, DEFAULT_ROOM_FROST_TEMP),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=-10, max=15, step=0.5, unit_of_measurement="°C",
+                    mode=selector.NumberSelectorMode.BOX,
+                ),
+            ),
+            vol.Required(
+                CONF_WATER_WARN_TEMP,
+                default=opts.get(CONF_WATER_WARN_TEMP, DEFAULT_WATER_WARN_TEMP),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=10, step=0.5, unit_of_measurement="°C",
+                    mode=selector.NumberSelectorMode.BOX,
+                ),
+            ),
+        })
+        return self.async_show_form(step_id="frost_watchdog", data_schema=schema)
 
     # --- Dosing settings ---
 

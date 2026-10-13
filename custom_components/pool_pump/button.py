@@ -22,6 +22,7 @@ async def async_setup_entry(
     async_add_entities([
         BackwashResetButton(coordinator, entry),
         NotausButton(coordinator, entry),
+        FrostAlertTestButton(coordinator, entry),
     ])
 
 
@@ -63,3 +64,17 @@ class NotausButton(_BaseButton):
 
     async def async_press(self) -> None:
         await self._coordinator.async_emergency_stop()
+
+
+class FrostAlertTestButton(_BaseButton):
+    """Send a test push to the configured notify service."""
+
+    _attr_name = "Frost-Wächter testen"
+    _attr_icon = "mdi:message-alert-outline"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_frost_alert_test"
+
+    async def async_press(self) -> None:
+        await self._coordinator.async_send_test_alert()

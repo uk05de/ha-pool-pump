@@ -147,6 +147,15 @@
           "threshold": "Schwelle"
         }
       },
+      "frost_watchdog": {
+        "title": "Frost-Wächter & Benachrichtigung",
+        "description": "Überwacht den Frostschutz und schickt eine Benachrichtigung, wenn die Anlage ungeschützt ist (Automatik aus bei Frost, Shelly nicht erreichbar, Pumpe unerwartet aus, Außensensor fehlt, Technikraum oder Poolwasser zu kalt). Liegt der Technikraum unter der Raum-Frostgrenze, läuft der Frostschutz durchgehend (mit Drehzahl der aktuellen Schwelle).",
+        "data": {
+          "notify_service": "Benachrichtigungsdienst (z.B. notify.mobile_app_…)",
+          "room_frost_temp": "Raum-Frostgrenze Technikraum (°C) — darunter Dauerlauf",
+          "water_warn_temp": "Warnung bei Poolwasser unter (°C)"
+        }
+      },
       "heat_pump_settings": {
         "title": "Wärmepumpen-Steuerung",
         "description": "Steuert die Wärmepumpe über deren Power-Schalter. Der eigentliche Mit-Schalt-Wunsch wird über den Switch 'Wärmepumpe mit-schalten' gesetzt.",

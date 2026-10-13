@@ -22,7 +22,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: PoolPumpCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([PoolPumpRunning(coordinator, entry)])
+    async_add_entities([
+        PoolPumpRunning(coordinator, entry),
+        FrostWarning(coordinator, entry),
+    ])
 
 
 class PoolPumpRunning(BinarySensorEntity):
@@ -50,3 +53,37 @@ class PoolPumpRunning(BinarySensorEntity):
     @property
     def icon(self) -> str:
         return "mdi:pump" if self._coordinator.running else "mdi:pump-off"
+
+
+class FrostWarning(BinarySensorEntity):
+    """An wenn der Frost-Wächter ein Problem gemeldet hat."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Frost-Warnung"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, coordinator: PoolPumpCoordinator, entry: ConfigEntry):
+        self._coordinator = coordinator
+        self._attr_unique_id = f"{entry.entry_id}_frost_warning"
+        self._attr_device_info = {"identifiers": {(DOMAIN, entry.entry_id)}}
+
+    async def async_added_to_hass(self) -> None:
+        self._coordinator.add_listener(self.async_write_ha_state)
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._coordinator.remove_listener(self.async_write_ha_state)
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._coordinator.frost_alerts)
+
+    @property
+    def icon(self) -> str:
+        return "mdi:snowflake-alert" if self.is_on else "mdi:snowflake-check"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "alerts": self._coordinator.frost_alerts,
+            "room_frost": self._coordinator.room_cold,
+        }

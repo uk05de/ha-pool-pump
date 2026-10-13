@@ -12,7 +12,9 @@ Zwei Setup-Varianten (Auswahl im ersten Config-Flow-Schritt, änderbar per **Rec
   - **Start Switch** (`switch`, z.B. Shelly 1) — Trockenkontakt Start/Stop
 - **Simple Mode** (`CONF_SIMPLE_MODE`): nur Start Switch, keine Drehzahl (Speed gilt intern als 100 %, kein Speed-Number/-Sensor).
 
-Optional: Außentemperatur-Sensoren (mehrere, gemittelt), Wassertemperatur, Raumtemperatur (nur Anzeige), Frischwasser-Ventil.
+Optional: Außentemperatur-Sensoren (mehrere, gemittelt), Wassertemperatur (Live-Wert nur bei fließendem Wasser aussagekräftig), Raumtemperatur des Technikraums (Frost-Auslöser, s.u.), Frischwasser-Ventil.
+
+**Speed-Skala**: Die Integration arbeitet in Shelly-Prozent (0-10 V), nicht in Pumpen-Prozent. Die Pumpe bildet das auf ihren eigenen Drehzahlbereich ab, d.h. Shelly-% und die Prozentanzeige der Pumpe weichen voneinander ab.
 
 ### Shelly-Treiber (`coordinator.py`)
 
@@ -52,13 +54,16 @@ Background-Task alle `SCHEDULER_INTERVAL = 60 s`, aktiv nur bei `_active_program
 
 ### Frostschutz
 
-Aktiv wenn Außentemperatur unter einer Schwelle **oder** `winter_override`. Verlassen erst bei `FROST_HYSTERESIS_C = 1 °C` über der mildesten Schwelle.
+Aktiv wenn Außentemperatur unter einer Schwelle **oder** `winter_override` **oder** Technikraum kalt (`_room_cold`: Raumtemp < `room_frost_temp`, default 3 °C, 1 °C Hysterese). Verlassen erst bei `FROST_HYSTERESIS_C = 1 °C` über der mildesten Schwelle.
 
 `_frost_threshold_for(outside)`:
 - strengste unterschrittene Schwelle (`_find_threshold`)
 - keine unterschritten (Override oder Hysterese-Band) → **mildeste Schwelle** als Grund-Umwälzung
 - kein Außensensor → **strengste Schwelle** (fail-safe)
 - Wechsel zu einer milderen Schwelle ebenfalls erst mit 1 °C Hysterese
+- Technikraum kalt → gewählte Schwelle wird auf Dauerlauf umgestellt (Speed bleibt)
+
+Schwellenwechsel werden per Dict-Vergleich erkannt (nicht nur `below_temp`), damit auch der Raum-Dauerlauf-Umschalter greift.
 
 Pro Schwelle `interval_min`, `duration_min`, `speed`; `0/0` → kontinuierlich. Ein Zyklus läuft genau dann, wenn `_frost_cycle_start` gesetzt ist. Eine laufende Pumpe ohne Zyklus (z.B. nach Restart übernommen) wird vom nächsten Zyklus übernommen oder gestoppt.
 
@@ -82,6 +87,21 @@ Tagesfenster `normal_window_start`…`normal_window_end` (default 08:00–22:00,
 - **Notaus** (`async_emergency_stop`): alles sofort aus, kein Nachlauf, → manuell.
 - Neues Gerät: nur einen Eintrag in `_downstream_devices()` + Config/Switch/Strings ergänzen, keine Copy-Paste-Logik.
 
+## Frost-Wächter (`_check_frost_watchdog`)
+
+Läuft jeden Scheduler-Tick, unabhängig vom Programm. Eine Bedingung wird nach ihrer Grace-Zeit **einmal** gemeldet und beim Verschwinden mit „Erledigt" quittiert: persistente HA-Notification plus Push an `notify_service` (Options → „Frost-Wächter & Benachrichtigung"). `mobile_app_*` bekommt time-sensitive/high priority. Das läuft bewusst **nicht** über `_call`, damit es auch im Testmodus funktioniert.
+
+| Key | Bedingung | Grace |
+|---|---|---|
+| `unprotected` | frostrelevant ∧ Automatik aus ∧ Pumpe steht | 30 min (Platz für Rückspül-Handling) |
+| `hardware` | frostrelevant ∧ Shelly-Entity unavailable/unknown | 5 min |
+| `mismatch` | frostrelevant ∧ wir denken „läuft", Shelly sagt aus | 5 min |
+| `outside_sensor` | Außensensor konfiguriert, aber kein Wert | 15 min |
+| `room_cold` | Technikraum unter Grenze | sofort |
+| `water_cold` | Wasser < `water_warn_temp` (Live nur nach 5 min Lauf, sonst Puffer) | sofort |
+
+„Frostrelevant" = Override ∨ Raum kalt ∨ Außen < mildeste Schwelle ∨ Außensensor fehlt. Entities: `binary_sensor` Frost-Warnung (problem, Attribut `alerts`), Button „Frost-Wächter testen". Läuft HA selbst nicht, gibt es auch keine Warnung.
+
 ## Rückspülungs-Erinnerung / Frischwasser
 
 - Tägliche persistente Notification wenn `days_since_backwash >= backwash_interval_days` (default 14), **nur solange Automatik aktiv** (sonst Winter-/Leerstand-Ruhe). Backwash-Programm-Ende oder Button resetten.
@@ -94,14 +114,14 @@ Alle teilen ein `device_info` (identifiers `(DOMAIN, entry_id)`, Name/Manufactur
 - **switch**: `PumpSwitch` (Aus → manuell; Ein wird bei aktiver Automatik ignoriert), `AutomatikProgramSwitch`, `TimedProgramSwitch` je Programm, `WinterOverrideSwitch` (schreibt `entry.options` → Reload), ggf. `FreshwaterSwitch`, `HeatPumpEnabledSwitch`, `DosingEnabledSwitch`
 - **number**: `PoolPumpSpeed` (nicht im Simple Mode) — Writes werden bei aktiver Automatik ignoriert
 - **sensor**: Mode (`Manuell`/`Automatik`/`Frostschutz`/`Nachlauf`/Programmname), Speed (Text `Aus`/`45 %`), Nächster Wechsel (Timestamp), Test mode, Backwash (Tage bis fällig), Wassertemp. gepuffert, ggf. Außen-/Live-Wasser-/Raumtemperatur
-- **binary_sensor**: Status (running)
-- **button**: Backwash reset, Notaus
+- **binary_sensor**: Status (running), Frost-Warnung (problem)
+- **button**: Backwash reset, Notaus, Frost-Wächter testen
 
 ## Config Flow (`config_flow.py`)
 
 Setup: Normal vs. Simple → Entities. **Reconfigure** ändert die Hardware-Entities ohne Neuinstallation.
 
-Options-Menü: Automatik-Einstellungen · Programme anzeigen/hinzufügen/bearbeiten/entfernen · Frostschutz-Schwellen anzeigen/hinzufügen/bearbeiten/entfernen · Wärmepumpen-Steuerung · Dosieranlagen-Steuerung · Testmodus. Anzeige-Steps liefern Markdown-Tabellen über `description_placeholders` (`{programs}` / `{thresholds}` müssen in `strings.json`/`translations/` existieren). `normal_temp_divisor` hat keine UI.
+Options-Menü: Automatik-Einstellungen · Programme anzeigen/hinzufügen/bearbeiten/entfernen · Frostschutz-Schwellen anzeigen/hinzufügen/bearbeiten/entfernen · Frost-Wächter & Benachrichtigung · Wärmepumpen-Steuerung · Dosieranlagen-Steuerung · Testmodus. Anzeige-Steps liefern Markdown-Tabellen über `description_placeholders` (`{programs}` / `{thresholds}` müssen in `strings.json`/`translations/` existieren). `normal_temp_divisor` hat keine UI.
 
 Jede Options-Änderung → `async_update_listener` → `async_reload`. Laufender Zustand überlebt das dank Reconcile.
 
