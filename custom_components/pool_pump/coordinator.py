@@ -10,6 +10,7 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.storage import Store
 
@@ -23,12 +24,10 @@ from .const import (
     CONF_ROOM_TEMP,
     CONF_SIMPLE_MODE,
     CONF_TEST_MODE,
-    CONF_WINTER_OVERRIDE,
     CONF_WINTER_THRESHOLDS,
     CONF_NORMAL_WINDOW_START,
     CONF_NORMAL_WINDOW_END,
     CONF_NORMAL_SPEED,
-    CONF_NORMAL_TEMP_DIVISOR,
     CONF_PROGRAMS,
     CONF_BACKWASH_INTERVAL_DAYS,
     CONF_BACKWASH_PROGRAM_NAME,
@@ -60,6 +59,9 @@ from .const import (
     SCHEDULER_INTERVAL,
     MIN_PAUSE_MINUTES,
     FROST_HYSTERESIS_C,
+    WATER_SAMPLE_INTERVAL,
+    HARDWARE_WAIT_TIMEOUT,
+    HARDWARE_SETTLE_DELAY,
     MODE_MANUAL,
     MODE_AUTOMATIK,
     TEMP_MIN_PLAUSIBLE,
@@ -102,6 +104,19 @@ def _parse_dt(value: str | None) -> datetime | None:
     return dt_util.parse_datetime(value) if value else None
 
 
+def _run_hours_for(water_temp: float | None) -> float:
+    """Daily filter hours in normal mode, from the buffered water temp.
+
+    Below 15 °C a third of the water temp, above it 5 h plus 0.75 h per
+    degree — continuous at 15 °C, steeper in warm water. No value yet → 6 h.
+    """
+    if water_temp is None:
+        return 6.0
+    if water_temp < 15:
+        return max(1.0, water_temp / 3)
+    return 5.0 + 0.75 * (water_temp - 15)
+
+
 class PoolPumpCoordinator:
     """Central brain — program switches, scheduler, Shelly driver."""
 
@@ -125,6 +140,7 @@ class PoolPumpCoordinator:
         self._running = False
         self._run_start_time: float | None = None
         self._buffered_water_temp: float | None = None
+        self._last_water_sample: float | None = None
 
         # Frost state
         self._last_frost_run_end: float | None = None
@@ -186,6 +202,9 @@ class PoolPumpCoordinator:
         self._setup_program: str | None = None
         self._ready = asyncio.Event()
 
+        # Pending check after a Shelly state change (see `_check_hardware_drift`)
+        self._drift_check_cancel = None
+
     # --- Options accessors ---
 
     @property
@@ -196,10 +215,6 @@ class PoolPumpCoordinator:
     def simple_mode(self) -> bool:
         """No power switch, no speed control — just dumb on/off via start_switch."""
         return self.entry.data.get(CONF_SIMPLE_MODE, False)
-
-    @property
-    def winter_override(self) -> bool:
-        return self.entry.options.get(CONF_WINTER_OVERRIDE, False)
 
     @property
     def thresholds(self) -> list[dict]:
@@ -220,10 +235,6 @@ class PoolPumpCoordinator:
     @property
     def normal_speed(self) -> int:
         return self.entry.options.get(CONF_NORMAL_SPEED, 30)
-
-    @property
-    def temp_divisor(self) -> float:
-        return self.entry.options.get(CONF_NORMAL_TEMP_DIVISOR, 2.0)
 
     @property
     def notify_service(self) -> str | None:
@@ -426,9 +437,7 @@ class PoolPumpCoordinator:
         if now > today_end:
             return today_start + timedelta(days=1)
 
-        water_temp = self._buffered_water_temp
-        run_hours_fresh = max(1.0, water_temp / self.temp_divisor) if water_temp else 6.0
-        run_hours = self._cached_run_hours or run_hours_fresh
+        run_hours = self._cached_run_hours or _run_hours_for(self._buffered_water_temp)
 
         window_hours = (today_end - today_start).total_seconds() / 3600
         if run_hours >= window_hours:
@@ -546,6 +555,16 @@ class PoolPumpCoordinator:
 
     # --- Restart reconciliation ---
 
+    def _hardware_entities(self) -> list[str]:
+        return [e for e in (self._power_switch, self._speed_number, self._start_switch) if e]
+
+    def _unavailable_hardware(self) -> list[str]:
+        return [
+            e for e in self._hardware_entities()
+            if (st := self.hass.states.get(e)) is None
+            or st.state in ("unavailable", "unknown")
+        ]
+
     def _hardware_running(self) -> bool:
         start = self.hass.states.get(self._start_switch)
         if not start or start.state != "on":
@@ -553,7 +572,10 @@ class PoolPumpCoordinator:
         if self.simple_mode:
             return True
         power = self.hass.states.get(self._power_switch)
-        return bool(power and power.state == "on")
+        if not (power and power.state == "on"):
+            return False
+        # Start contact closed at 0 % moves no water — that's not running
+        return self._hardware_speed() > 0
 
     def _hardware_speed(self) -> float:
         if self.simple_mode:
@@ -577,6 +599,7 @@ class PoolPumpCoordinator:
         whatever was in flight before (nachlauf, timed program, manual run).
         """
         try:
+            await self._wait_for_hardware()
             await self._reconcile()
         except Exception:
             log.exception("Hardware reconcile failed")
@@ -584,6 +607,68 @@ class PoolPumpCoordinator:
             self._restored = {}
             self._ready.set()
             self._notify()
+        self.entry.async_on_unload(async_track_state_change_event(
+            self.hass, self._hardware_entities(), self._on_hardware_change
+        ))
+
+    async def _wait_for_hardware(self) -> None:
+        """Shelly entities often come up a little after HA has started —
+        reading them earlier would mistake a running pump for a stopped one."""
+        deadline = time.monotonic() + HARDWARE_WAIT_TIMEOUT
+        while self._unavailable_hardware() and time.monotonic() < deadline:
+            await asyncio.sleep(2)
+        if missing := self._unavailable_hardware():
+            log.warning("Reconciling without %s", ", ".join(missing))
+
+    # --- Live hardware tracking ---
+
+    @callback
+    def _on_hardware_change(self, _event) -> None:
+        # Our own switching lands here too — compare once things settled.
+        if self._drift_check_cancel:
+            self._drift_check_cancel()
+        self._drift_check_cancel = async_call_later(
+            self.hass, HARDWARE_SETTLE_DELAY, self._check_hardware_drift
+        )
+
+    async def _check_hardware_drift(self, _now=None) -> None:
+        """Follow Shelly changes made outside the integration.
+
+        Someone switched the Shelly directly, or it rebooted with the relay
+        off. Mirror the real state so status, watchdog and scheduler work
+        with the truth — automatik restarts a stopped pump on its next tick.
+        """
+        self._drift_check_cancel = None
+        if self.test_mode or self.in_nachlauf or self._unavailable_hardware():
+            return
+        if self._lock.locked():
+            # A start/stop sequence is in flight — look again afterwards
+            self._on_hardware_change(None)
+            return
+        async with self._lock:
+            hw_running = self._hardware_running()
+            if hw_running and not self._running:
+                log.warning("Pump was started outside the integration — adopting")
+                self._running = True
+                self._run_start_time = time.monotonic()
+            elif not hw_running and self._running:
+                log.warning("Pump was stopped outside the integration")
+                self._running = False
+                self._run_start_time = None
+                self._target_speed = 0
+                if self._active_program == MODE_AUTOMATIK:
+                    # A pending frost-cycle stop belongs to the dead run
+                    if self._program_task and not self._program_task.done():
+                        self._program_task.cancel()
+                    self._program_task = None
+                    self._frost_cycle_start = None
+            if self._running and not self.simple_mode:
+                speed = self._hardware_speed()
+                if abs(speed - self._target_speed) > 1:  # light brightness rounds
+                    log.info("Speed changed outside the integration: %.0f%%", speed)
+                    self._target_speed = speed
+            await self._persist_state()
+        self._notify()
 
     async def _reconcile(self) -> None:
         stored = self._restored
@@ -661,6 +746,8 @@ class PoolPumpCoordinator:
             self._nachlauf_task.cancel()
         if self._freshwater_task and not self._freshwater_task.done():
             self._freshwater_task.cancel()
+        if self._drift_check_cancel:
+            self._drift_check_cancel()
         await self._persist_state()
         log.info("Pool Pump coordinator stopped")
 
@@ -693,6 +780,7 @@ class PoolPumpCoordinator:
         """
         if self._active_program == program_name:
             return
+        previous = self._active_program
 
         # Cancel any active program/frost timer + reset frost state, but
         # leave the pump running — the new program will adjust the speed.
@@ -706,6 +794,9 @@ class PoolPumpCoordinator:
             # Automatik — scheduler will pick up on next cycle, but evaluate immediately
             self._notify()
             await self._evaluate()
+            # A pump that keeps running (adopted block / frost cycle) never
+            # went through ensure_running, so hand the devices over here.
+            await self._sync_downstream(previous)
         else:
             # Timed program — find config and start
             prog = self._find_program(program_name)
@@ -724,14 +815,37 @@ class PoolPumpCoordinator:
                     self._notify()
 
     async def async_deactivate_program(self, program_name: str) -> None:
-        """Deactivate a specific program → manual mode."""
+        """Deactivate a specific program → manual mode.
+
+        Automatik hands over smoothly: the pump keeps running at its current
+        speed — stopping is the pump switch's / Notaus' job. Timed programs
+        stop the pump (a 70 % backwash shouldn't carry on in manual).
+        """
         if self._active_program != program_name:
             return
-        await self._stop_current_program()
-        self._active_program = None
+        if program_name == MODE_AUTOMATIK and not self.in_nachlauf:
+            self._cancel_program_state()
+            self._active_program = None
+            await self._sync_downstream(MODE_AUTOMATIK)
+        else:
+            await self._stop_current_program()
+            self._active_program = None
         await self._persist_state()
         self._notify()
         log.info("Program deactivated: %s → manual mode", program_name)
+
+    async def _sync_downstream(self, previous: str | None) -> None:
+        """Program changed while the pump keeps running: hand the downstream
+        devices over. No nachlauf needed — the water keeps flowing."""
+        if not self._running or self.in_nachlauf:
+            return
+        async with self._lock:
+            for dev in self._downstream_devices():
+                if dev.co_controlled_for(self._active_program):
+                    if not self._device_any_entity_on(dev):
+                        await self._device_turn_on(dev)
+                elif dev.co_controlled_for(previous) and self._device_any_entity_on(dev):
+                    await self._device_turn_off(dev)
 
     def _cancel_program_state(self) -> None:
         """Cancel program task + reset frost/auto state. Does NOT touch the pump."""
@@ -801,6 +915,7 @@ class PoolPumpCoordinator:
                 self._update_room_cold()
                 if self._active_program == MODE_AUTOMATIK:
                     await self._evaluate()
+                await self._sample_water_temp_while_running()
                 await self._check_backwash_reminder()
                 await self._check_frost_watchdog()
             except Exception:
@@ -848,7 +963,7 @@ class PoolPumpCoordinator:
         An unavailable outside sensor counts as relevant — we can't rule
         frost out, so the watchdog should keep watching.
         """
-        if self.winter_override or self._room_cold:
+        if self._room_cold:
             return True
         if not self.thresholds:
             return False
@@ -873,12 +988,7 @@ class PoolPumpCoordinator:
             )
 
         if frost:
-            hw = [e for e in (self._power_switch, self._speed_number, self._start_switch) if e]
-            unavailable = [
-                e for e in hw
-                if (st := self.hass.states.get(e)) is None
-                or st.state in ("unavailable", "unknown")
-            ]
+            unavailable = self._unavailable_hardware()
             if unavailable:
                 conds["hardware"] = (
                     WATCHDOG_GRACE_HARDWARE, "Shelly nicht erreichbar",
@@ -895,8 +1005,8 @@ class PoolPumpCoordinator:
         if self._outside_temps and self.outside_temperature is None:
             conds["outside_sensor"] = (
                 WATCHDOG_GRACE_SENSOR, "Außentemperatur fehlt",
-                "Kein Außentemperatur-Sensor verfügbar. Frostschutz läuft nur mit "
-                "erzwungenem Wintermodus — dann auf der strengsten Stufe.",
+                "Kein Außentemperatur-Sensor verfügbar. Die Automatik fährt "
+                "vorsorglich Frostschutz auf der strengsten Stufe.",
             )
 
         if self._room_cold:
@@ -1011,36 +1121,36 @@ class PoolPumpCoordinator:
             return
 
         outside = self.outside_temperature
-        frost_needed = False
 
-        if self.winter_override or self._room_cold:
+        if self._room_cold:
             frost_needed = True
-        elif outside is not None:
+        elif outside is None:
+            # Configured sensor without a value: frost can't be ruled out,
+            # so protect on the strictest threshold (fail-safe).
+            frost_needed = bool(self._outside_temps and self.thresholds)
+        else:
             # Hysteresis on the frost↔normal boundary: when we're already in
             # frost mode, raise the bar for leaving by FROST_HYSTERESIS_C.
             # This stops normal↔frost flapping when outside temp hovers near
-            # a threshold, which would otherwise toggle the pump (and the WP)
-            # every scheduler tick.
+            # a threshold.
             if self._auto_sub_mode == "frost_protection":
                 probe = outside - FROST_HYSTERESIS_C
             else:
                 probe = outside
-            threshold = self._find_threshold(probe)
-            if threshold is not None:
-                frost_needed = True
+            frost_needed = self._find_threshold(probe) is not None
 
+        # Switching between normal and frost never stops the pump by itself:
+        # a running pump is taken over by the new sub-mode, which then
+        # adjusts speed or stops it if it doesn't want to run.
         if frost_needed:
-            if self._running and self._auto_sub_mode == "normal":
-                await self.async_ensure_stopped()
             self._auto_sub_mode = "frost_protection"
             self._notify()
             await self._handle_frost_mode(outside)
         else:
-            if self._running and self._auto_sub_mode == "frost_protection":
-                await self.async_ensure_stopped()
-                if self._program_task and not self._program_task.done():
-                    self._program_task.cancel()
-                    self._program_task = None
+            # A pending frost-cycle stop must not hit a normal block
+            if self._program_task and not self._program_task.done():
+                self._program_task.cancel()
+            self._program_task = None
             self._frost_cycle_start = None
             self._current_frost_threshold = None
             self._auto_sub_mode = "normal"
@@ -1084,10 +1194,12 @@ class PoolPumpCoordinator:
                     (t for t in self.thresholds if t["below_temp"] == current["below_temp"]),
                     threshold,
                 )
-        # Cold Technikraum: keep the threshold's speed, but never pause —
-        # the pool water (warmer than the room) keeps pump and filter ice-free.
-        if self._room_cold and (threshold["interval_min"] or threshold["duration_min"]):
-            threshold = {**threshold, "interval_min": 0, "duration_min": 0}
+        # Cold Technikraum: the pipes in there freeze first — strictest
+        # threshold, and never pause (the pool water, warmer than the room,
+        # keeps pump and filter ice-free).
+        if self._room_cold:
+            strictest = min(self.thresholds, key=lambda t: t["below_temp"])
+            threshold = {**strictest, "interval_min": 0, "duration_min": 0}
         return threshold
 
     async def _handle_frost_mode(self, outside: float | None) -> None:
@@ -1174,8 +1286,7 @@ class PoolPumpCoordinator:
             return
 
         in_window = window_start <= now.time() <= window_end
-        water_temp = self._buffered_water_temp
-        run_hours_fresh = max(1.0, water_temp / self.temp_divisor) if water_temp else 6.0
+        run_hours_fresh = _run_hours_for(self._buffered_water_temp)
 
         # Freeze the schedule while the pump is stopped OR in nachlauf.
         # A water-temp sample taken right before stop (see _nachlauf_then_stop)
@@ -1196,6 +1307,9 @@ class PoolPumpCoordinator:
         if should_run and (not self._running or self.in_nachlauf):
             self._cached_run_hours = run_hours_fresh
             await self.async_ensure_running(self.normal_speed)
+        elif should_run and not self.simple_mode and self._target_speed != self.normal_speed:
+            # Pump taken over from manual, frost mode or a restart
+            await self.async_set_speed(self.normal_speed)
         elif not should_run and self._running:
             await self.async_ensure_stopped()
 
@@ -1253,8 +1367,19 @@ class PoolPumpCoordinator:
         if live_temp is not None:
             old = self._buffered_water_temp
             self._buffered_water_temp = live_temp
+            self._last_water_sample = time.monotonic()
             await self._persist_state()
             log.info("Buffered water temp: %s°C → %.1f°C", old, live_temp)
+
+    async def _sample_water_temp_while_running(self) -> None:
+        """Long runs (frost continuous, manual 24/7) never stop, so the
+        stop-time sample alone would leave the buffer stale for weeks."""
+        if not self._running or self.in_nachlauf:
+            return
+        last = self._last_water_sample
+        if last is not None and time.monotonic() - last < WATER_SAMPLE_INTERVAL:
+            return
+        await self._sample_water_temp_if_eligible()
 
     # --- Shelly driver ---
 
@@ -1304,9 +1429,14 @@ class PoolPumpCoordinator:
             await self._call("switch", "turn_off", {"entity_id": self._start_switch})
         else:
             log.info("pool pump stop")
+            # If this fails the pump still runs — let the error through
             await self._call("switch", "turn_off", {"entity_id": self._start_switch})
-            await asyncio.sleep(STOP_DELAY)
-            await self._set_speed_entity(0)
+            try:
+                await asyncio.sleep(STOP_DELAY)
+                await self._set_speed_entity(0)
+            except Exception:
+                # Start contact is open — the pump is off either way
+                log.exception("Setting speed 0 after stop failed")
         self._target_speed = 0
         self._running = False
         self._run_start_time = None

@@ -40,28 +40,34 @@ Shelly-Relais behalten ihren Zustand über HA-Restart und Entry-Reload. Deshalb 
 - Manuell + lief vorher → wieder anwerfen
 - Automatik → wird schon in `async_setup` restauriert; der Scheduler wartet (`_ready`) bis der Abgleich durch ist.
 
+Vor dem Abgleich wartet `_wait_for_hardware` bis zu `HARDWARE_WAIT_TIMEOUT = 120 s`, bis die Shelly-Entities verfügbar sind. „Läuft" heißt: Start an ∧ Power an ∧ Speed > 0.
+
+### Live-Abgleich (`_check_hardware_drift`)
+
+Nach dem Abgleich hört der Coordinator auf State-Changes der Shelly-Entities und vergleicht `HARDWARE_SETTLE_DELAY = 10 s` danach (nicht im Testmodus, nicht während Lock/Nachlauf). Von außen gestartet → übernehmen, von außen gestoppt → `_running=False` (in Automatik auch Frost-Zyklus verwerfen, der nächste Tick startet neu), Speed-Abweichung > 1 % → übernehmen.
+
 ## Programm-Modell
 
 Nur **ein Programm aktiv**. `_active_program`: `None` (manuell), `"automatik"` oder Name eines benutzerdefinierten Programms.
 
-`async_activate_program()` ist ein **Smooth Transition**: es cancelt nur Program-Task/Frost-State (`_cancel_program_state`), die Pumpe läuft weiter und bekommt den neuen Speed. Gestoppt wird nur beim Deaktivieren (→ manuell) bzw. Pumpe-Aus. Timed Programs (`duration_min > 0`) stoppen sich über `_program_timed_stop()` und fallen immer auf manuell zurück.
+`async_activate_program()` ist ein **Smooth Transition**: es cancelt nur Program-Task/Frost-State (`_cancel_program_state`), die Pumpe läuft weiter und bekommt den neuen Speed. **Automatik aus** ist ebenfalls sanft: → manuell, Pumpe läuft mit aktuellem Speed weiter. Gestoppt wird beim Deaktivieren eines Zeitprogramms, über Pumpe-Aus oder „Sofort aus". Läuft die Pumpe bei einem Programmwechsel weiter, übergibt `_sync_downstream(previous)` die Downstream-Geräte (ohne Nachlauf). Timed Programs (`duration_min > 0`) stoppen sich über `_program_timed_stop()` und fallen immer auf manuell zurück.
 
 Default-Programme (`DEFAULT_PROGRAMS`): Backwash 70 %/3 min, Nachspülen 50 %/1 min, Reinigen 40 %/5 min. Pro Programm ein `TimedProgramSwitch` (Slug inkl. Umlaut-Mapping).
 
 ## Automatik-Scheduler
 
-Background-Task alle `SCHEDULER_INTERVAL = 60 s`, aktiv nur bei `_active_program == "automatik"`. `_evaluate()` wählt **Normal** oder **Frostschutz** (`_auto_sub_mode`).
+Background-Task alle `SCHEDULER_INTERVAL = 60 s`, aktiv nur bei `_active_program == "automatik"`. `_evaluate()` wählt **Normal** oder **Frostschutz** (`_auto_sub_mode`). Der Wechsel zwischen beiden stoppt die Pumpe nicht: der neue Modus übernimmt sie und passt Speed an bzw. stoppt, wenn er nicht laufen will.
 
 ### Frostschutz
 
-Aktiv wenn Außentemperatur unter einer Schwelle **oder** `winter_override` **oder** Technikraum kalt (`_room_cold`: Raumtemp < `room_frost_temp`, default 3 °C, 1 °C Hysterese). Verlassen erst bei `FROST_HYSTERESIS_C = 1 °C` über der mildesten Schwelle.
+Aktiv wenn Außentemperatur unter einer Schwelle **oder** Außensensor konfiguriert, aber ohne Wert (fail-safe) **oder** Technikraum kalt (`_room_cold`: Raumtemp < `room_frost_temp`, default 3 °C, 1 °C Hysterese). Verlassen erst bei `FROST_HYSTERESIS_C = 1 °C` über der mildesten Schwelle. (Den Schalter „Wintermodus erzwingen" gibt es seit 0.16.0 nicht mehr.)
 
 `_frost_threshold_for(outside)`:
 - strengste unterschrittene Schwelle (`_find_threshold`)
-- keine unterschritten (Override oder Hysterese-Band) → **mildeste Schwelle** als Grund-Umwälzung
-- kein Außensensor → **strengste Schwelle** (fail-safe)
+- keine unterschritten (Hysterese-Band) → **mildeste Schwelle** als Grund-Umwälzung
+- kein Außenwert → **strengste Schwelle** (fail-safe)
 - Wechsel zu einer milderen Schwelle ebenfalls erst mit 1 °C Hysterese
-- Technikraum kalt → gewählte Schwelle wird auf Dauerlauf umgestellt (Speed bleibt)
+- Technikraum kalt → **strengste Schwelle als Dauerlauf**
 
 Schwellenwechsel werden per Dict-Vergleich erkannt (nicht nur `below_temp`), damit auch der Raum-Dauerlauf-Umschalter greift.
 
@@ -71,11 +77,11 @@ Default-Thresholds (`DEFAULT_THRESHOLDS`): 4 °C 120/15/20 %, 2 °C 60/20/25 %, 
 
 ### Normal-Modus
 
-Tagesfenster `normal_window_start`…`normal_window_end` (default 08:00–22:00, **darf nicht über Mitternacht gehen**). `run_hours = max(1, water_temp / temp_divisor)` (default-Divisor 2.0, ohne Puffer-Wert 6 h). `_should_run_now()` verteilt auf 3/2/1 Blöcke mit Mindestpause `MIN_PAUSE_MINUTES = 30`, halbe Gaps am Rand. `_cached_run_hours` wird nur bei laufender Pumpe (nicht im Nachlauf) aktualisiert → kein Phantom-Restart durch Temp-Sample am Blockende.
+Tagesfenster `normal_window_start`…`normal_window_end` (default 08:00–22:00, **darf nicht über Mitternacht gehen**). `_run_hours_for(water)`: unter 15 °C `max(1, water/3)`, darüber `5 + 0.75·(water−15)` (stetig bei 15 °C), ohne Puffer-Wert 6 h. Läuft die Pumpe im Block mit anderem Speed (übernommen), wird `normal_speed` gesetzt. `_should_run_now()` verteilt auf 3/2/1 Blöcke mit Mindestpause `MIN_PAUSE_MINUTES = 30`, halbe Gaps am Rand. `_cached_run_hours` wird nur bei laufender Pumpe (nicht im Nachlauf) aktualisiert → kein Phantom-Restart durch Temp-Sample am Blockende.
 
 ### Wassertemperatur-Puffer
 
-`_sample_water_temp_if_eligible()` übernimmt die Live-Temperatur erst nach `MIN_RUN_FOR_SAMPLE = 300 s` Laufzeit, und zwar direkt vor dem eigentlichen Stop. Plausibilisierung `-30…60 °C`.
+`_sample_water_temp_if_eligible()` übernimmt die Live-Temperatur erst nach `MIN_RUN_FOR_SAMPLE = 300 s` Laufzeit, und zwar direkt vor dem eigentlichen Stop sowie bei langen Läufen alle `WATER_SAMPLE_INTERVAL = 30 min` (nicht im Nachlauf). Plausibilisierung `-30…60 °C`.
 
 ## Downstream-Geräte (Wärmepumpe, Dosieranlage)
 
@@ -84,7 +90,7 @@ Tagesfenster `normal_window_start`…`normal_window_end` (default 08:00–22:00,
 - Start: Pool an → co-controlled Geräte an (turn_on immer, wegen stale states)
 - Stop: co-controlled Geräte aus → **Nachlauf** `max(shutdown_delay)` → Pool aus. Während Nachlauf: `in_nachlauf`, Mode-Sensor „Nachlauf", Status bleibt an.
 - `ensure_running` während Nachlauf cancelt den Stop.
-- **Notaus** (`async_emergency_stop`): alles sofort aus, kein Nachlauf, → manuell.
+- **Sofort aus** (Button, intern `NotausButton` / `async_emergency_stop`, unique_id `_notaus`): alles sofort aus, kein Nachlauf, → manuell. Das ist der normale Stopp im Alltag (Rückspülen/Reinigen beenden, vor dem Umstellen der Hähne).
 - Neues Gerät: nur einen Eintrag in `_downstream_devices()` + Config/Switch/Strings ergänzen, keine Copy-Paste-Logik.
 
 ## Frost-Wächter (`_check_frost_watchdog`)
@@ -111,17 +117,17 @@ Läuft jeden Scheduler-Tick, unabhängig vom Programm. Eine Bedingung wird nach 
 
 Alle teilen ein `device_info` (identifiers `(DOMAIN, entry_id)`, Name/Manufacturer am `PumpSwitch`).
 
-- **switch**: `PumpSwitch` (Aus → manuell; Ein wird bei aktiver Automatik ignoriert), `AutomatikProgramSwitch`, `TimedProgramSwitch` je Programm, `WinterOverrideSwitch` (schreibt `entry.options` → Reload), ggf. `FreshwaterSwitch`, `HeatPumpEnabledSwitch`, `DosingEnabledSwitch`
-- **number**: `PoolPumpSpeed` (nicht im Simple Mode) — Writes werden bei aktiver Automatik ignoriert
+- **switch**: `PumpSwitch` (Aus → manuell; Ein wird bei aktiver Automatik ignoriert), `AutomatikProgramSwitch`, `TimedProgramSwitch` je Programm, ggf. `FreshwaterSwitch`, `HeatPumpEnabledSwitch`, `DosingEnabledSwitch`
+- **number**: `PoolPumpSpeed` (nicht im Simple Mode) — Writes werden bei aktiver Automatik ignoriert; 0 bei laufender Pumpe = Pumpe aus
 - **sensor**: Mode (`Manuell`/`Automatik`/`Frostschutz`/`Nachlauf`/Programmname), Speed (Text `Aus`/`45 %`), Nächster Wechsel (Timestamp), Test mode, Backwash (Tage bis fällig), Wassertemp. gepuffert, ggf. Außen-/Live-Wasser-/Raumtemperatur
 - **binary_sensor**: Status (running), Frost-Warnung (problem)
-- **button**: Backwash reset, Notaus, Frost-Wächter testen
+- **button**: Backwash reset, Sofort aus, Frost-Wächter testen
 
 ## Config Flow (`config_flow.py`)
 
 Setup: Normal vs. Simple → Entities. **Reconfigure** ändert die Hardware-Entities ohne Neuinstallation.
 
-Options-Menü: Automatik-Einstellungen · Programme anzeigen/hinzufügen/bearbeiten/entfernen · Frostschutz-Schwellen anzeigen/hinzufügen/bearbeiten/entfernen · Frost-Wächter & Benachrichtigung · Wärmepumpen-Steuerung · Dosieranlagen-Steuerung · Testmodus. Anzeige-Steps liefern Markdown-Tabellen über `description_placeholders` (`{programs}` / `{thresholds}` müssen in `strings.json`/`translations/` existieren). `normal_temp_divisor` hat keine UI.
+Options-Menü: Automatik-Einstellungen · Programme anzeigen/hinzufügen/bearbeiten/entfernen · Frostschutz-Schwellen anzeigen/hinzufügen/bearbeiten/entfernen · Frost-Wächter & Benachrichtigung · Wärmepumpen-Steuerung · Dosieranlagen-Steuerung · Testmodus. Anzeige-Steps liefern Markdown-Tabellen über `description_placeholders` (`{programs}` / `{thresholds}` müssen in `strings.json`/`translations/` existieren).
 
 Jede Options-Änderung → `async_update_listener` → `async_reload`. Laufender Zustand überlebt das dank Reconcile.
 
@@ -131,7 +137,7 @@ Jede Options-Änderung → `async_update_listener` → `async_reload`. Laufender
 - **`_lock`** schützt die Shelly-Sequenzen; `_start/_stop_pool_pump_hardware` nur mit gehaltenem Lock aufrufen.
 - **`entry.async_create_background_task`** für alle langen Tasks.
 - **Test Mode loggt nur**: beim Entwickeln aktivieren, sonst schaltet die echte Pumpe.
-- **Winter-Override / Test-Mode** leben in `entry.options` → `async_update_entry` (Reload). Mit-schalten-Flags leben im Store.
+- **Test-Mode** lebt in `entry.options` → `async_update_entry` (Reload). Mit-schalten-Flags leben im Store.
 - Zeit immer über `dt_util.now()` (HA-Zeitzone), Laufzeiten/Intervalle über `time.monotonic()`.
 
 ## Projektstruktur

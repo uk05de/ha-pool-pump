@@ -49,13 +49,14 @@ class BackwashResetButton(_BaseButton):
 
 
 class NotausButton(_BaseButton):
-    """Emergency stop — cancel program/nachlauf, hard-stop pool + HP.
+    """Stop right now — cancel program/nachlauf, hard-stop pool + HP → manual.
 
-    Skips the heat-pump nachlauf delay. The HP may go into E3 (flow loss)
+    The everyday stop (end backwash/cleaning early, before turning valves),
+    so it skips the heat-pump nachlauf delay. The HP may go into E3 (flow loss)
     on push, which is an accepted trade-off for an immediate stop.
     """
 
-    _attr_name = "Notaus"
+    _attr_name = "Sofort aus"
     _attr_icon = "mdi:stop-circle-outline"
 
     def __init__(self, coordinator, entry):

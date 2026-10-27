@@ -24,12 +24,14 @@ MIN_PAUSE_MINUTES = 30      # minutes: below this, don't bother pausing — run 
 FROST_HYSTERESIS_C = 1.0    # °C: temperature must rise this much above any threshold
                             # before we leave frost protection — prevents flapping
                             # when outside temp hovers near a boundary
+WATER_SAMPLE_INTERVAL = 1800.0  # seconds: refresh the buffered water temp during long runs
+HARDWARE_WAIT_TIMEOUT = 120.0   # seconds: wait for Shelly entities after HA start
+HARDWARE_SETTLE_DELAY = 10.0    # seconds: after a Shelly state change, before comparing
 
 # Options keys — normal operation
 CONF_NORMAL_WINDOW_START = "normal_window_start"
 CONF_NORMAL_WINDOW_END = "normal_window_end"
 CONF_NORMAL_SPEED = "normal_speed"
-CONF_NORMAL_TEMP_DIVISOR = "normal_temp_divisor"
 
 # Options keys — user-defined programs
 CONF_PROGRAMS = "programs"
@@ -48,7 +50,6 @@ CONF_FRESHWATER_DURATION = "freshwater_duration"
 DEFAULT_FRESHWATER_DURATION = 30  # minutes
 
 # Options keys — frost protection
-CONF_WINTER_OVERRIDE = "winter_override"
 CONF_WINTER_THRESHOLDS = "winter_thresholds"
 # Each: {below_temp, interval_min, duration_min, speed}
 # interval_min=0 + duration_min=0 → continuous

@@ -57,6 +57,10 @@ class PoolPumpSpeed(NumberEntity):
             return
 
         if self._coordinator.running:
+            if value <= 0:
+                # 0 % moves no water — treat it as switching the pump off
+                await self._coordinator.async_pump_switch_off()
+                return
             await self._coordinator.async_set_speed(value)
         else:
             self._coordinator._target_speed = value

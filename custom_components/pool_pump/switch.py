@@ -1,4 +1,4 @@
-"""Pool Pump switches — pump, program switches, winter override."""
+"""Pool Pump switches — pump, program switches, downstream gates."""
 
 import logging
 
@@ -7,7 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, CONF_PROGRAMS, CONF_WINTER_OVERRIDE, DEFAULT_PROGRAMS, MODE_AUTOMATIK
+from .const import DOMAIN, CONF_PROGRAMS, DEFAULT_PROGRAMS, MODE_AUTOMATIK
 from .coordinator import PoolPumpCoordinator
 
 log = logging.getLogger(__name__)
@@ -23,7 +23,6 @@ async def async_setup_entry(
     entities = [
         PumpSwitch(coordinator, entry),
         AutomatikProgramSwitch(coordinator, entry),
-        WinterOverrideSwitch(coordinator, entry),
     ]
 
     if coordinator.freshwater_available:
@@ -206,27 +205,3 @@ class DosingEnabledSwitch(_BaseSwitch):
     async def async_turn_off(self, **kwargs) -> None:
         await self._coordinator.async_set_dosing_enabled(False)
 
-
-class WinterOverrideSwitch(_BaseSwitch):
-    """Force frost protection regardless of temperatures."""
-
-    _attr_name = "Wintermodus erzwingen"
-    _attr_icon = "mdi:snowflake-alert"
-
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_winter_override"
-
-    @property
-    def is_on(self) -> bool:
-        return self._coordinator.winter_override
-
-    async def async_turn_on(self, **kwargs) -> None:
-        self.hass.config_entries.async_update_entry(
-            self._entry, options={**self._entry.options, CONF_WINTER_OVERRIDE: True}
-        )
-
-    async def async_turn_off(self, **kwargs) -> None:
-        self.hass.config_entries.async_update_entry(
-            self._entry, options={**self._entry.options, CONF_WINTER_OVERRIDE: False}
-        )
