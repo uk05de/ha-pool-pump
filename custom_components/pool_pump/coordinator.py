@@ -10,6 +10,7 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.storage import Store
@@ -28,6 +29,8 @@ from .const import (
     CONF_NORMAL_WINDOW_START,
     CONF_NORMAL_WINDOW_END,
     CONF_NORMAL_SPEED,
+    CONF_WINTER_SPEED,
+    DEFAULT_WINTER_SPEED,
     CONF_PROGRAMS,
     CONF_BACKWASH_INTERVAL_DAYS,
     CONF_BACKWASH_PROGRAM_NAME,
@@ -62,6 +65,7 @@ from .const import (
     WATER_SAMPLE_INTERVAL,
     HARDWARE_WAIT_TIMEOUT,
     HARDWARE_SETTLE_DELAY,
+    WINTER_OFF_TIMEOUT,
     MODE_MANUAL,
     MODE_AUTOMATIK,
     TEMP_MIN_PLAUSIBLE,
@@ -179,6 +183,14 @@ class PoolPumpCoordinator:
         # on toggle.
         self._heat_pump_enabled: bool = False
         self._dosing_enabled: bool = False
+
+        # Winterbetrieb (persisted in the store, no reload on toggle): no
+        # backwash reminder, no downstream co-control, normal mode at the
+        # mildest frost speed. The downstream switches are turned off and
+        # disabled in the entity registry; we remember which ones we
+        # disabled so spring re-enables exactly those.
+        self._winter_mode: bool = False
+        self._winter_disabled: list[str] = []
 
         # Tasks
         self._scheduler_task: asyncio.Task | None = None
@@ -298,6 +310,21 @@ class PoolPumpCoordinator:
         """User wants the pool pump to co-control the dosing pumps."""
         return self._dosing_enabled
 
+    # --- Winterbetrieb ---
+
+    @property
+    def winter_mode(self) -> bool:
+        return self._winter_mode
+
+    @property
+    def winter_speed(self) -> int:
+        return self.entry.options.get(CONF_WINTER_SPEED, DEFAULT_WINTER_SPEED)
+
+    @property
+    def effective_normal_speed(self) -> float:
+        """Normal-mode speed — in Winterbetrieb the water only needs moving."""
+        return self.winter_speed if self._winter_mode else self.normal_speed
+
     # --- Nachlauf state ---
 
     @property
@@ -323,7 +350,7 @@ class PoolPumpCoordinator:
                 name="heat_pump",
                 entities=(self.heat_pump_power_entity,),
                 allowlist=tuple(self.heat_pump_programs),
-                enabled=self._heat_pump_enabled,
+                enabled=self._heat_pump_enabled and not self._winter_mode,
                 shutdown_delay=self.heat_pump_shutdown_delay,
             ))
         if self.dosing_switches:
@@ -331,7 +358,7 @@ class PoolPumpCoordinator:
                 name="dosing",
                 entities=tuple(self.dosing_switches),
                 allowlist=tuple(self.dosing_programs),
-                enabled=self._dosing_enabled,
+                enabled=self._dosing_enabled and not self._winter_mode,
                 shutdown_delay=self.dosing_shutdown_delay,
             ))
         return devs
@@ -525,6 +552,8 @@ class PoolPumpCoordinator:
             self._last_backwash_date = stored.get("last_backwash_date")
             self._heat_pump_enabled = bool(stored.get("heat_pump_enabled", False))
             self._dosing_enabled = bool(stored.get("dosing_enabled", False))
+            self._winter_mode = bool(stored.get("winter_mode", False))
+            self._winter_disabled = list(stored.get("winter_disabled_entities") or [])
             log.info(
                 "Restored buffered water temp: %s°C, last backwash: %s, "
                 "active program: %s, running: %s, heat pump enabled: %s, "
@@ -758,6 +787,8 @@ class PoolPumpCoordinator:
             "active_program": self._active_program,
             "heat_pump_enabled": self._heat_pump_enabled,
             "dosing_enabled": self._dosing_enabled,
+            "winter_mode": self._winter_mode,
+            "winter_disabled_entities": self._winter_disabled,
             # Run state — lets `_reconcile` finish what a restart interrupted
             "running": self._running,
             "target_speed": self._target_speed,
@@ -924,8 +955,8 @@ class PoolPumpCoordinator:
 
     async def _check_backwash_reminder(self) -> None:
         """Send daily notification if backwash is overdue."""
-        # Manual mode (e.g. winter shutdown, pool drained) → stay silent.
-        if self._active_program != MODE_AUTOMATIK:
+        # Manual mode (e.g. pool drained) or Winterbetrieb → stay silent.
+        if self._active_program != MODE_AUTOMATIK or self._winter_mode:
             return
         if not self.backwash_overdue:
             return
@@ -1306,10 +1337,14 @@ class PoolPumpCoordinator:
         # downstream devices. ensure_stopped is idempotent against in_nachlauf.
         if should_run and (not self._running or self.in_nachlauf):
             self._cached_run_hours = run_hours_fresh
-            await self.async_ensure_running(self.normal_speed)
-        elif should_run and not self.simple_mode and self._target_speed != self.normal_speed:
-            # Pump taken over from manual, frost mode or a restart
-            await self.async_set_speed(self.normal_speed)
+            await self.async_ensure_running(self.effective_normal_speed)
+        elif (
+            should_run and not self.simple_mode
+            and self._target_speed != self.effective_normal_speed
+        ):
+            # Pump taken over from manual, frost mode, a restart, or the
+            # Winterbetrieb switch changed the speed
+            await self.async_set_speed(self.effective_normal_speed)
         elif not should_run and self._running:
             await self.async_ensure_stopped()
 
@@ -1599,6 +1634,88 @@ class PoolPumpCoordinator:
         await self._persist_state()
         self._notify()
         await self._apply_downstream_toggle("dosing")
+
+    async def async_set_winter_mode(self, enabled: bool) -> None:
+        """Toggle Winterbetrieb.
+
+        On: turn every configured downstream switch off and disable it in
+        the entity registry, so neither a click nor an automation can turn
+        on dosing with removed electrodes or a drained heat pump.
+        Off: re-enable exactly what we disabled, but leave it off — dosing
+        only makes sense once the electrodes are back and calibrated.
+        """
+        if enabled == self._winter_mode:
+            return
+        self._winter_mode = enabled
+        log.info("Winterbetrieb %s", "on" if enabled else "off")
+        if enabled:
+            await self._winter_lock_downstream()
+        else:
+            self._winter_unlock_downstream()
+        await self._persist_state()
+        self._notify()
+
+    async def _winter_lock_downstream(self) -> None:
+        registry = er.async_get(self.hass)
+        failed: list[str] = []
+        not_disabled: list[str] = []
+        for dev in self._downstream_devices():
+            for entity_id in dev.entities:
+                if self.test_mode:
+                    log.warning("[TEST MODE] would turn off and disable %s", entity_id)
+                    continue
+                # Off first, disable only once HA reports it off. A switch we
+                # couldn't turn off stays visible — it may still be dosing.
+                try:
+                    if not self._state_is(entity_id, "off"):
+                        await self._call("switch", "turn_off", {"entity_id": entity_id})
+                        for _ in range(WINTER_OFF_TIMEOUT):
+                            if self._state_is(entity_id, "off"):
+                                break
+                            await asyncio.sleep(1)
+                except Exception:
+                    log.exception("Winterbetrieb: turning off %s failed", entity_id)
+                if not self._state_is(entity_id, "off"):
+                    failed.append(entity_id)
+                    continue
+                entry = registry.async_get(entity_id)
+                if entry is None:
+                    # No unique_id (e.g. YAML-defined) → off, but can't be disabled
+                    log.warning("Winterbetrieb: %s has no registry entry, left enabled", entity_id)
+                    not_disabled.append(entity_id)
+                    continue
+                if entry.disabled_by is None:
+                    registry.async_update_entity(
+                        entity_id, disabled_by=er.RegistryEntryDisabler.USER
+                    )
+                    if entity_id not in self._winter_disabled:
+                        self._winter_disabled.append(entity_id)
+                    log.info("Winterbetrieb: %s turned off and disabled", entity_id)
+        if failed or not_disabled:
+            parts = []
+            if failed:
+                parts.append("Nicht ausgeschaltet: " + ", ".join(failed))
+            if not_disabled:
+                parts.append("Aus, aber nicht deaktivierbar (keine unique_id): "
+                             + ", ".join(not_disabled))
+            await self._send_alert(
+                "winter", "Winterbetrieb unvollständig",
+                ". ".join(parts) + ". Bitte von Hand prüfen.",
+            )
+
+    def _state_is(self, entity_id: str, value: str) -> bool:
+        st = self.hass.states.get(entity_id)
+        return st is not None and st.state == value
+
+    def _winter_unlock_downstream(self) -> None:
+        registry = er.async_get(self.hass)
+        for entity_id in self._winter_disabled:
+            entry = registry.async_get(entity_id)
+            # Only undo our own disabling — not one the user set later
+            if entry and entry.disabled_by == er.RegistryEntryDisabler.USER:
+                registry.async_update_entity(entity_id, disabled_by=None)
+                log.info("Winterbetrieb off: %s re-enabled (left off)", entity_id)
+        self._winter_disabled = []
 
     # --- Notaus (emergency stop) ---
 

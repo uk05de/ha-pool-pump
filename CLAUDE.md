@@ -27,7 +27,7 @@ Optional: Außentemperatur-Sensoren (mehrere, gemittelt), Wassertemperatur (Live
 
 Hält Zustand, Scheduler-Loop, Shelly-Treiber und Downstream-Steuerung. Entities sind dünne Wrapper via `add_listener` / `_notify()` — **keine DataUpdateCoordinator-Basisklasse**.
 
-Persistenter Zustand via `Store` (key `pool_pump_state`): `buffered_water_temp`, `last_backwash_date`, `active_program`, `heat_pump_enabled`, `dosing_enabled`, `running`, `target_speed`, `program_end_at`, `nachlauf_end_at`. Wird bei jedem Start/Stop/Speed-Wechsel geschrieben.
+Persistenter Zustand via `Store` (key `pool_pump_state`): `buffered_water_temp`, `last_backwash_date`, `active_program`, `heat_pump_enabled`, `dosing_enabled`, `winter_mode`, `winter_disabled_entities`, `running`, `target_speed`, `program_end_at`, `nachlauf_end_at`. Wird bei jedem Start/Stop/Speed-Wechsel geschrieben.
 
 ### Restart / Reload (`_async_reconcile_hardware`)
 
@@ -93,6 +93,16 @@ Tagesfenster `normal_window_start`…`normal_window_end` (default 08:00–22:00,
 - **Sofort aus** (Button, intern `NotausButton` / `async_emergency_stop`, unique_id `_notaus`): alles sofort aus, kein Nachlauf, → manuell. Das ist der normale Stopp im Alltag (Rückspülen/Reinigen beenden, vor dem Umstellen der Hähne).
 - Neues Gerät: nur einen Eintrag in `_downstream_devices()` + Config/Switch/Strings ergänzen, keine Copy-Paste-Logik.
 
+## Winterbetrieb (`async_set_winter_mode`)
+
+Schalter „Winterbetrieb“, Flag im Store (kein Reload). An:
+- Rückspül-Erinnerung pausiert.
+- Downstream-Geräte gelten als nicht `enabled` (kein Mit-Schalten, kein Nachlauf).
+- Jede konfigurierte Downstream-Entity wird **erst ausgeschaltet**; deaktiviert wird sie in der Entity-Registry (`disabled_by=USER`) erst, wenn HA „off“ meldet (`WINTER_OFF_TIMEOUT = 30 s`). Klappt das nicht, bleibt sie sichtbar, und es geht ein Alert raus. Die selbst deaktivierten IDs stehen in `_winter_disabled`.
+- Normalbetrieb läuft mit `effective_normal_speed` = `winter_speed` (Options → „Winterbetrieb“, default 20 %; auch Startwert des Pump-Schalters).
+
+Aus: nur die selbst deaktivierten Entities wieder aktivieren (falls noch `disabled_by=USER`), **nicht** einschalten. Bayrol erst von Hand, wenn die Elektroden wieder drin sind. Im Testmodus wird nur geloggt.
+
 ## Frost-Wächter (`_check_frost_watchdog`)
 
 Läuft jeden Scheduler-Tick, unabhängig vom Programm. Eine Bedingung wird nach ihrer Grace-Zeit **einmal** gemeldet und beim Verschwinden mit „Erledigt" quittiert: persistente HA-Notification plus Push an `notify_service` (Options → „Frost-Wächter & Benachrichtigung"). `mobile_app_*` bekommt time-sensitive/high priority. Das läuft bewusst **nicht** über `_call`, damit es auch im Testmodus funktioniert.
@@ -106,18 +116,18 @@ Läuft jeden Scheduler-Tick, unabhängig vom Programm. Eine Bedingung wird nach 
 | `room_cold` | Technikraum unter Grenze | sofort |
 | `water_cold` | Wasser < `water_warn_temp` (Live nur nach 5 min Lauf, sonst Puffer) | sofort |
 
-„Frostrelevant" = Override ∨ Raum kalt ∨ Außen < mildeste Schwelle ∨ Außensensor fehlt. Entities: `binary_sensor` Frost-Warnung (problem, Attribut `alerts`), Button „Frost-Wächter testen". Läuft HA selbst nicht, gibt es auch keine Warnung.
+„Frostrelevant" = Raum kalt ∨ Außen < mildeste Schwelle ∨ Außensensor fehlt. Entities: `binary_sensor` Frost-Warnung (problem, Attribut `alerts`), Button „Frost-Wächter testen". Läuft HA selbst nicht, gibt es auch keine Warnung.
 
 ## Rückspülungs-Erinnerung / Frischwasser
 
-- Tägliche persistente Notification wenn `days_since_backwash >= backwash_interval_days` (default 14), **nur solange Automatik aktiv** (sonst Winter-/Leerstand-Ruhe). Backwash-Programm-Ende oder Button resetten.
+- Tägliche persistente Notification wenn `days_since_backwash >= backwash_interval_days` (default 14), **nur solange Automatik aktiv und kein Winterbetrieb**. Backwash-Programm-Ende oder Button resetten.
 - Frischwasser: Ventil an → Timer `freshwater_duration` (default 30 min) → aus. Nur wenn konfiguriert.
 
 ## HA-Entities
 
 Alle teilen ein `device_info` (identifiers `(DOMAIN, entry_id)`, Name/Manufacturer am `PumpSwitch`).
 
-- **switch**: `PumpSwitch` (Aus → manuell; Ein wird bei aktiver Automatik ignoriert), `AutomatikProgramSwitch`, `TimedProgramSwitch` je Programm, ggf. `FreshwaterSwitch`, `HeatPumpEnabledSwitch`, `DosingEnabledSwitch`
+- **switch**: `PumpSwitch` (Aus → manuell; Ein wird bei aktiver Automatik ignoriert), `AutomatikProgramSwitch`, `WinterModeSwitch`, `TimedProgramSwitch` je Programm, ggf. `FreshwaterSwitch`, `HeatPumpEnabledSwitch`, `DosingEnabledSwitch`
 - **number**: `PoolPumpSpeed` (nicht im Simple Mode) — Writes werden bei aktiver Automatik ignoriert; 0 bei laufender Pumpe = Pumpe aus
 - **sensor**: Mode (`Manuell`/`Automatik`/`Frostschutz`/`Nachlauf`/Programmname), Speed (Text `Aus`/`45 %`), Nächster Wechsel (Timestamp), Test mode, Backwash (Tage bis fällig), Wassertemp. gepuffert, ggf. Außen-/Live-Wasser-/Raumtemperatur
 - **binary_sensor**: Status (running), Frost-Warnung (problem)
@@ -127,7 +137,7 @@ Alle teilen ein `device_info` (identifiers `(DOMAIN, entry_id)`, Name/Manufactur
 
 Setup: Normal vs. Simple → Entities. **Reconfigure** ändert die Hardware-Entities ohne Neuinstallation.
 
-Options-Menü: Automatik-Einstellungen · Programme anzeigen/hinzufügen/bearbeiten/entfernen · Frostschutz-Schwellen anzeigen/hinzufügen/bearbeiten/entfernen · Frost-Wächter & Benachrichtigung · Wärmepumpen-Steuerung · Dosieranlagen-Steuerung · Testmodus. Anzeige-Steps liefern Markdown-Tabellen über `description_placeholders` (`{programs}` / `{thresholds}` müssen in `strings.json`/`translations/` existieren).
+Options-Menü: Automatik-Einstellungen · Programme anzeigen/hinzufügen/bearbeiten/entfernen · Frostschutz-Schwellen anzeigen/hinzufügen/bearbeiten/entfernen · Frost-Wächter & Benachrichtigung · Winterbetrieb · Wärmepumpen-Steuerung · Dosieranlagen-Steuerung · Testmodus. Anzeige-Steps liefern Markdown-Tabellen über `description_placeholders` (`{programs}` / `{thresholds}` müssen in `strings.json`/`translations/` existieren).
 
 Jede Options-Änderung → `async_update_listener` → `async_reload`. Laufender Zustand überlebt das dank Reconcile.
 
@@ -137,7 +147,7 @@ Jede Options-Änderung → `async_update_listener` → `async_reload`. Laufender
 - **`_lock`** schützt die Shelly-Sequenzen; `_start/_stop_pool_pump_hardware` nur mit gehaltenem Lock aufrufen.
 - **`entry.async_create_background_task`** für alle langen Tasks.
 - **Test Mode loggt nur**: beim Entwickeln aktivieren, sonst schaltet die echte Pumpe.
-- **Test-Mode** lebt in `entry.options` → `async_update_entry` (Reload). Mit-schalten-Flags leben im Store.
+- **Test-Mode** lebt in `entry.options` → `async_update_entry` (Reload). Mit-schalten- und Winterbetrieb-Flag leben im Store.
 - Zeit immer über `dt_util.now()` (HA-Zeitzone), Laufzeiten/Intervalle über `time.monotonic()`.
 
 ## Projektstruktur

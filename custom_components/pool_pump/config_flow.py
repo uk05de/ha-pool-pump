@@ -20,6 +20,8 @@ from .const import (
     CONF_NORMAL_WINDOW_START,
     CONF_NORMAL_WINDOW_END,
     CONF_NORMAL_SPEED,
+    CONF_WINTER_SPEED,
+    DEFAULT_WINTER_SPEED,
     CONF_PROGRAMS,
     CONF_BACKWASH_INTERVAL_DAYS,
     CONF_BACKWASH_PROGRAM_NAME,
@@ -235,6 +237,7 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
                 "edit_threshold": "Frostschutz-Schwelle bearbeiten",
                 "remove_threshold": "Frostschutz-Schwelle entfernen",
                 "frost_watchdog": "Frost-Wächter & Benachrichtigung",
+                "winter_settings": "Winterbetrieb",
                 "heat_pump_settings": "Wärmepumpen-Steuerung",
                 "dosing_settings": "Dosieranlagen-Steuerung",
                 "test": "Testmodus",
@@ -630,6 +633,28 @@ class PoolPumpOptionsFlow(config_entries.OptionsFlow):
             ),
         })
         return self.async_show_form(step_id="frost_watchdog", data_schema=schema)
+
+    # --- Winterbetrieb ---
+
+    async def async_step_winter_settings(self, user_input=None):
+        if user_input is not None:
+            options = dict(self._entry.options)
+            options[CONF_WINTER_SPEED] = int(user_input[CONF_WINTER_SPEED])
+            return self.async_create_entry(title="", data=options)
+
+        opts = self._entry.options
+        schema = vol.Schema({
+            vol.Required(
+                CONF_WINTER_SPEED,
+                default=opts.get(CONF_WINTER_SPEED, DEFAULT_WINTER_SPEED),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=5, max=100, step=5, unit_of_measurement="%",
+                    mode=selector.NumberSelectorMode.BOX,
+                ),
+            ),
+        })
+        return self.async_show_form(step_id="winter_settings", data_schema=schema)
 
     # --- Dosing settings ---
 

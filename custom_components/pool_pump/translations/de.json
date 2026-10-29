@@ -149,11 +149,18 @@
       },
       "frost_watchdog": {
         "title": "Frost-Wächter & Benachrichtigung",
-        "description": "Überwacht den Frostschutz und schickt eine Benachrichtigung, wenn die Anlage ungeschützt ist (Automatik aus bei Frost, Shelly nicht erreichbar, Pumpe unerwartet aus, Außensensor fehlt, Technikraum oder Poolwasser zu kalt). Liegt der Technikraum unter der Raum-Frostgrenze, läuft der Frostschutz durchgehend (mit Drehzahl der aktuellen Schwelle).",
+        "description": "Überwacht den Frostschutz und schickt eine Benachrichtigung, wenn die Anlage ungeschützt ist (Automatik aus bei Frost, Shelly nicht erreichbar, Pumpe unerwartet aus, Außensensor fehlt, Technikraum oder Poolwasser zu kalt). Liegt der Technikraum unter der Raum-Frostgrenze, läuft der Frostschutz durchgehend auf der strengsten Schwelle.",
         "data": {
           "notify_service": "Benachrichtigungsdienst (z.B. notify.mobile_app_…)",
           "room_frost_temp": "Raum-Frostgrenze Technikraum (°C) — darunter Dauerlauf",
           "water_warn_temp": "Warnung bei Poolwasser unter (°C)"
+        }
+      },
+      "winter_settings": {
+        "title": "Winterbetrieb",
+        "description": "Gilt, solange der Schalter 'Winterbetrieb' an ist: Die Rückspül-Erinnerung pausiert, Wärmepumpe und Dosierung werden ausgeschaltet und deaktiviert (im Frühjahr nur wieder aktiviert, nicht eingeschaltet), und der Normalbetrieb läuft mit der Winter-Drehzahl. Frostschutz und Frost-Wächter arbeiten unverändert.",
+        "data": {
+          "winter_speed": "Drehzahl im Normalbetrieb (Winter)"
         }
       },
       "heat_pump_settings": {

@@ -27,6 +27,7 @@ FROST_HYSTERESIS_C = 1.0    # °C: temperature must rise this much above any thr
 WATER_SAMPLE_INTERVAL = 1800.0  # seconds: refresh the buffered water temp during long runs
 HARDWARE_WAIT_TIMEOUT = 120.0   # seconds: wait for Shelly entities after HA start
 HARDWARE_SETTLE_DELAY = 10.0    # seconds: after a Shelly state change, before comparing
+WINTER_OFF_TIMEOUT = 30         # seconds: wait for a downstream switch to report off
 
 # Options keys — normal operation
 CONF_NORMAL_WINDOW_START = "normal_window_start"
@@ -48,6 +49,10 @@ DEFAULT_BACKWASH_INTERVAL = 14
 CONF_FRESHWATER_SWITCH = "freshwater_switch"
 CONF_FRESHWATER_DURATION = "freshwater_duration"
 DEFAULT_FRESHWATER_DURATION = 30  # minutes
+
+# Options keys — Winterbetrieb
+CONF_WINTER_SPEED = "winter_speed"  # normal-mode speed while Winterbetrieb is on
+DEFAULT_WINTER_SPEED = 20
 
 # Options keys — frost protection
 CONF_WINTER_THRESHOLDS = "winter_thresholds"

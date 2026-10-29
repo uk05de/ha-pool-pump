@@ -23,6 +23,7 @@ async def async_setup_entry(
     entities = [
         PumpSwitch(coordinator, entry),
         AutomatikProgramSwitch(coordinator, entry),
+        WinterModeSwitch(coordinator, entry),
     ]
 
     if coordinator.freshwater_available:
@@ -81,7 +82,7 @@ class PumpSwitch(_BaseSwitch):
             # The scheduler would undo it on its next tick anyway
             log.info("Pump turn-on ignored — automatik is active")
             return
-        speed = self._coordinator.target_speed or self._coordinator.normal_speed
+        speed = self._coordinator.target_speed or self._coordinator.effective_normal_speed
         await self._coordinator.async_ensure_running(speed)
 
     async def async_turn_off(self, **kwargs) -> None:
@@ -151,6 +152,28 @@ class FreshwaterSwitch(_BaseSwitch):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._coordinator.async_stop_freshwater()
+
+
+class WinterModeSwitch(_BaseSwitch):
+    """Winterbetrieb: no backwash reminder, heat pump and dosing switched
+    off and disabled, normal mode at the mildest frost speed."""
+
+    _attr_name = "Winterbetrieb"
+    _attr_icon = "mdi:snowflake"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_winter_mode"
+
+    @property
+    def is_on(self) -> bool:
+        return self._coordinator.winter_mode
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._coordinator.async_set_winter_mode(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._coordinator.async_set_winter_mode(False)
 
 
 class HeatPumpEnabledSwitch(_BaseSwitch):
